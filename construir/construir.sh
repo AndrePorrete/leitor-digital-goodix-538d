@@ -53,6 +53,7 @@ if [ ! -f "$DEPS/lib/libcrypto.a" ]; then
   (cd openssl && ./Configure linux-x86_64 no-shared no-tests no-module -fPIC \
      --prefix="$DEPS" --libdir=lib --openssldir=/etc/ssl >/dev/null &&
    make -j"$JOBS" >/dev/null && make install_sw >/dev/null)
+  mkdir -p "$DEPS/licencas" && cp openssl/LICENSE.txt "$DEPS/licencas/openssl-Apache-2.0.txt"
 fi
 
 step "OpenCV $OPENCV_VER (static: core, imgproc, features2d, flann)"
@@ -72,6 +73,7 @@ if [ ! -f "$DEPS/lib/libopencv_core.a" ]; then
     -DBUILD_JAVA=OFF -DBUILD_opencv_python3=OFF -DOPENCV_GENERATE_PKGCONFIG=OFF >/dev/null
   ninja -C opencv/build >/dev/null
   ninja -C opencv/build install >/dev/null
+  mkdir -p "$DEPS/licencas" && cp opencv/LICENSE "$DEPS/licencas/opencv-Apache-2.0.txt"
 fi
 
 # pkg-config files linking the static archives explicitly
@@ -125,8 +127,7 @@ cp "$REPO/ferramentas/testar.sh" "$REPO/ferramentas/cadastrar-angulos.sh" "$STAG
 cp "$REPO/LICENSE" "$STAGE/share/fprint-538d/licencas/fprint-538d-scripts.txt" 2>/dev/null || true
 cp libfprint/COPYING "$STAGE/share/fprint-538d/licencas/libfprint-LGPL-2.1.txt"
 cp fprintd/COPYING "$STAGE/share/fprint-538d/licencas/fprintd-GPL-2.0.txt"
-cp opencv/LICENSE "$STAGE/share/fprint-538d/licencas/opencv-Apache-2.0.txt"
-cp openssl/LICENSE.txt "$STAGE/share/fprint-538d/licencas/openssl-Apache-2.0.txt"
+cp "$DEPS"/licencas/*.txt "$STAGE/share/fprint-538d/licencas/"
 echo "$VERSION" >"$STAGE/share/fprint-538d/VERSAO"
 cat >"$STAGE/share/fprint-538d/FONTES.txt" <<EOF
 fprint-538d $VERSION — source code (GPL/LGPL: the complete corresponding source is listed here)

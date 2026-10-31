@@ -22,7 +22,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: /var/tmp/fprint-538d-build/deps
-          key: deps-${{ hashFiles('construir/construir.sh') }}
+          key: deps-v2-${{ hashFiles('construir/construir.sh') }}
       - name: Build
         run: bash construir/construir.sh
       - uses: actions/upload-artifact@v4
