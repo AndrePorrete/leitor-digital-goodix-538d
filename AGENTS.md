@@ -22,6 +22,9 @@ Linux: dar comandos prontos para colar, explicar em linguagem simples, nunca sug
   "Leitor de digital" (`/usr/local/bin/leitor-digital` + `.desktop`): cadastrar, testar, nível, apagar,
   atualizar, desinstalar. Nível de reconhecimento 70/60/55 em `/etc/fprint-538d.conf`.
   Histórico reescrito sem e-mail pessoal (backup: `~/.cache/fprint-538d-backup-historico.git`).
+- **Conta GitHub (2026-10-31): pessoal `AndrePorrete`** (repo público + release v0.3.2). A conta de trabalho
+  `AndrePorreteWEB` não deve ser usada aqui; histórico reescrito para `56418580+AndrePorrete@users.noreply.github.com`
+  (backup antes da troca: `~/.cache/fprint-538d-backup-antes-conta-nova.git`). `gh` tem as duas contas; ativa: AndrePorrete.
 - Falta: dono validar a v0.3.2 no Mint; relatos em Fedora/Arch reais.
 
 ## Ler antes
