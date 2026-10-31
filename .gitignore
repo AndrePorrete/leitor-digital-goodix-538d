@@ -13,3 +13,4 @@ teste-*.tempos
 build*/
 stage/
 __pycache__/
+dist/
