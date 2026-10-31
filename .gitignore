@@ -1,0 +1,15 @@
+# Dados biométricos: NUNCA versionar
+*.pgm
+*.variant
+*.npy
+*.npz
+dump*/
+coleta*/
+dataset*/
+rotulos.txt
+teste-*.txt
+teste-*.tempos
+# build
+build*/
+stage/
+__pycache__/
