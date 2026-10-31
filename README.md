@@ -43,6 +43,30 @@ bash /opt/fprint-538d/share/fprint-538d/instalar.sh --uninstall
 Tips: **touch lightly** (pressing distorts the print), and during enrollment vary the position and
 rotate the finger a little, so it is recognised at more angles.
 
+## Hard fingers (calluses, dry skin)
+
+String players, manual workers or people with very dry skin may have fingers the reader recognises
+poorly. Then:
+
+1. **Enroll the fingers with fewer calluses** (e.g. the ones that do not press strings). You can
+   enroll several: any of them is accepted.
+2. **Tune the recognition level:**
+
+   ```sh
+   bash /opt/fprint-538d/share/fprint-538d/instalar.sh --tune
+   ```
+
+   | Level | Minimum score | When |
+   |---|---|---|
+   | Strict | 70 | maximum security, you accept repeating touches |
+   | Default | 60 | most people |
+   | Tolerant | 55 | callused or dry fingers |
+
+   In the tests, wrong fingers scored at most 51: Tolerant is still above that, with less margin.
+   The setting is kept on updates.
+3. Enroll again when the calluses change a lot. The reader also learns from well recognised
+   touches (score ≥ 75).
+
 ## Supported
 
 | Family | Distributions | PAM (login) setup |

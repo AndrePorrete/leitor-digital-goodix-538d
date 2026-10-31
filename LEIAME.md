@@ -42,6 +42,30 @@ bash /opt/fprint-538d/share/fprint-538d/instalar.sh --desinstalar
 Dicas: **encoste de leve** (apertar deforma a digital) e, no cadastro, varie a posição e gire um
 pouco o dedo, para ele ser reconhecido em mais ângulos.
 
+## Dedos difíceis (calos, pele seca)
+
+Quem toca instrumento de corda, trabalha com as mãos ou tem pele muito seca pode ter dedos que o
+leitor reconhece mal. Nesse caso:
+
+1. **Cadastre os dedos com menos calo** (por exemplo, os que não apertam as cordas). Pode cadastrar
+   vários: qualquer um deles é aceito.
+2. **Ajuste o nível de reconhecimento:**
+
+   ```sh
+   bash /opt/fprint-538d/share/fprint-538d/instalar.sh --ajustar
+   ```
+
+   | Nível | Nota mínima | Quando usar |
+   |---|---|---|
+   | Rigoroso | 70 | quer o máximo de segurança, aceita repetir o toque |
+   | Padrão | 60 | a maioria das pessoas |
+   | Tolerante | 55 | dedos com calo ou pele seca |
+
+   Nos testes, dedos errados tiraram no máximo 51 — o nível Tolerante ainda fica acima disso, mas
+   com menos folga. O ajuste é mantido ao atualizar.
+3. Cadastre de novo quando os calos mudarem bastante. Com o uso, o leitor também vai aprendendo
+   sozinho com os toques bem reconhecidos (nota ≥ 75).
+
 ## Compatibilidade
 
 | Família | Distribuições | Login (PAM) |

@@ -5,6 +5,7 @@
 #
 #   Install / repair / update:  bash instalar.sh
 #   Uninstall:                  bash instalar.sh --desinstalar      (or --uninstall)
+#   Recognition level:          bash instalar.sh --ajustar          (or --tune)
 #   Options:                    --pacote FILE.tar.gz   use a local bundle instead of downloading
 #                               --compilar             build the bundle here (podman or docker)
 #                               --sem-cadastro         do not enroll a finger at the end
@@ -20,6 +21,10 @@ PREFIXO=/opt/fprint-538d
 ESTADO=/var/lib/fprint-538d
 DROPIN_DIR=/etc/systemd/system/fprintd.service.d
 DROPIN=$DROPIN_DIR/fprint-538d.conf
+AJUSTE_CONF=/etc/fprint-538d.conf # recognition level, kept on update
+# Acceptance threshold levels (score 0-100). Wrong fingers scored at most 51 in the tests.
+NIVEIS=(70 60 55)
+NIVEL_PADRAO=60
 DROPINS_ANTIGOS="goodix-538d.conf calibracao.conf" # manual install of the first version
 # Left by version 0.1.0 (own PAM profile / lines, power button): removed on update and uninstall
 LEGADO_LOGIND=/etc/systemd/logind.conf.d/fprint-538d-botao.conf
@@ -357,6 +362,8 @@ raiz_instalar() { # pacote usuario pam(s/n)
 [Service]
 ExecStart=
 ExecStart=$PREFIXO/libexec/fprintd
+# Recognition level (bash instalar.sh --ajustar)
+EnvironmentFile=-$AJUSTE_CONF
 # Diagnostics (scores in the journal): uncomment, then systemctl restart fprintd
 #Environment=G_MESSAGES_DEBUG=libfprint-print
 EOF
@@ -398,7 +405,7 @@ raiz_desinstalar() { # apagar_digitais(s/n)
   titulo "Removendo o fprint-538d" "Removing fprint-538d"
   desfazer_pam
   desfazer_legado
-  rm -f "$DROPIN"
+  rm -f "$DROPIN" "$AJUSTE_CONF"
   for f in $DROPINS_ANTIGOS; do rm -f "$DROPIN_DIR/$f"; done
   rmdir "$DROPIN_DIR" 2>/dev/null
   selinux_desfazer
@@ -411,6 +418,25 @@ raiz_desinstalar() { # apagar_digitais(s/n)
   fi
   rm -rf "$ESTADO"
   ok "Removido. O sistema voltou ao fprintd original da distribuição." "Removed. The system is back to the distribution fprintd."
+}
+
+raiz_ajustar() { # limiar
+  [ -e "$DROPIN" ] || fim_erro "O fprint-538d não está instalado." "fprint-538d is not installed."
+  case "$1" in *[!0-9]* | '') exit 1 ;; esac
+  # installs from version 0.1.0 do not read the file yet
+  grep -q '^EnvironmentFile=' "$DROPIN" || printf 'EnvironmentFile=-%s\n' "$AJUSTE_CONF" >>"$DROPIN"
+  if [ "$1" = "$NIVEL_PADRAO" ]; then
+    rm -f "$AJUSTE_CONF"
+  else
+    cat >"$AJUSTE_CONF" <<EOF
+# fprint-538d recognition level (bash $PREFIXO/share/fprint-538d/instalar.sh --ajustar)
+# Minimum score (0-100) to accept a finger. Default $NIVEL_PADRAO; lower accepts more, also wrong fingers.
+FPRINT_BZ3_THRESHOLD=$1
+EOF
+    chmod 644 "$AJUSTE_CONF"
+  fi
+  systemctl daemon-reload
+  systemctl restart fprintd 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -563,10 +589,41 @@ principal_instalar() {
   [ "$OPT_SEM_CADASTRO" = 1 ] || cadastrar
   titulo "Pronto!" "Done!"
   info "Desinstalar:  bash $PREFIXO/share/fprint-538d/instalar.sh --desinstalar" "Uninstall:  bash $PREFIXO/share/fprint-538d/instalar.sh --uninstall"
+  info "Dedo difícil de reconhecer (calos, pele seca)? Nível de reconhecimento:  bash $PREFIXO/share/fprint-538d/instalar.sh --ajustar" \
+    "Finger hard to recognise (calluses, dry skin)? Recognition level:  bash $PREFIXO/share/fprint-538d/instalar.sh --tune"
   info "Mais dedos: nas Configurações do sistema (Usuários / Digital) ou  fprintd-enroll -f left-index-finger" \
     "More fingers: in the system Settings (Users / Fingerprint) or  fprintd-enroll -f left-index-finger"
   info "Conte como foi no seu modelo: https://github.com/$REPO_GH/issues" "Tell us how it went on your model: https://github.com/$REPO_GH/issues"
   printf '\n'
+}
+
+nivel_atual() {
+  local v
+  v=$(sed -n 's/^FPRINT_BZ3_THRESHOLD=//p' "$AJUSTE_CONF" 2>/dev/null)
+  echo "${v:-$NIVEL_PADRAO}"
+}
+
+principal_ajustar() {
+  [ -e "$DROPIN" ] || fim_erro "O fprint-538d não está instalado. Instale primeiro: bash instalar.sh" \
+    "fprint-538d is not installed. Install first: bash instalar.sh"
+  local atual esc novo i
+  atual=$(nivel_atual)
+  titulo "Nível de reconhecimento" "Recognition level"
+  local nomes_pt=("Rigoroso — recusa mais, inclusive o seu dedo às vezes" "Padrão (recomendado)" "Tolerante — para dedos difíceis (calos, pele seca); aceita com nota menor")
+  local nomes_en=("Strict — rejects more, sometimes your own finger too" "Default (recommended)" "Tolerant — for hard fingers (calluses, dry skin); accepts lower scores")
+  for i in 0 1 2; do
+    printf '      %d) %s  [%s]%s\n' $((i + 1)) "$(t "${nomes_pt[$i]}" "${nomes_en[$i]}")" "${NIVEIS[$i]}" \
+      "$([ "${NIVEIS[$i]}" = "$atual" ] && t "  ← atual" "  ← current")"
+  done
+  info "Nos testes, dedos errados tiraram no máximo 51; o nível Tolerante (55) ainda fica acima disso." \
+    "In the tests, wrong fingers scored at most 51; the Tolerant level (55) is still above that."
+  [ "$TEM_TTY" = 1 ] || fim_erro "Rode num terminal para escolher." "Run it in a terminal to choose."
+  printf '   %s ' "$(t "Número (Enter = manter):" "Number (Enter = keep):")"
+  read -r esc <&3 || esc=""
+  case "$esc" in 1 | 2 | 3) novo=${NIVEIS[$((esc - 1))]} ;; *) info "Nada mudou." "Nothing changed."; return 0 ;; esac
+  [ "$novo" = "$atual" ] && { info "Nada mudou." "Nothing changed."; return 0; }
+  como_root ajustar "$novo" || exit 1
+  ok "Nível de reconhecimento: $novo (vale a partir do próximo toque)" "Recognition level: $novo (applies from the next touch)"
 }
 
 principal_desinstalar() {
@@ -593,6 +650,7 @@ ACAO=instalar OPT_PACOTE="" OPT_COMPILAR=0 OPT_SEM_CADASTRO=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --desinstalar | --uninstall) ACAO=desinstalar ;;
+    --ajustar | --tune) ACAO=ajustar ;;
     --pacote | --bundle) OPT_PACOTE=$(readlink -f "${2:-}"); shift ;;
     --compilar | --build) OPT_COMPILAR=1 ;;
     --sem-cadastro | --no-enroll) OPT_SEM_CADASTRO=1 ;;
@@ -605,10 +663,11 @@ while [ $# -gt 0 ]; do
       case "${1:-}" in
         instalar) shift; raiz_instalar "$@" ;;
         desinstalar) shift; raiz_desinstalar "$@" ;;
+        ajustar) shift; raiz_ajustar "$@" ;;
         *) exit 1 ;;
       esac
       exit $? ;;
-    -h | --help | --ajuda) sed -n '2,15p' "$SELF"; exit 0 ;;
+    -h | --help | --ajuda) sed -n '2,16p' "$SELF"; exit 0 ;;
     *) fim_erro "Opção desconhecida: $1" "Unknown option: $1" ;;
   esac
   shift
@@ -624,4 +683,5 @@ trap 'rm -rf "$TMPD"' EXIT
 case "$ACAO" in
   instalar) principal_instalar ;;
   desinstalar) principal_desinstalar ;;
+  ajustar) principal_ajustar ;;
 esac
