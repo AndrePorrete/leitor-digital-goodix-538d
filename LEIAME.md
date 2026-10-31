@@ -17,7 +17,7 @@ notebooks Dell) funcionar no Linux: login, desbloqueio de tela, `sudo` e janelas
    e aperte **Enter**:
 
 ```sh
-bash <(wget -qO- https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh || curl -fsSL https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh)
+sh -c "wget -qO- https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh || curl -fsSL https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh" | bash
 ```
 
 3. Siga a tela. O instalador explica cada passo e mostra quando está trabalhando:

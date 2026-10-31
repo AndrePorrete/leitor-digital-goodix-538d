@@ -941,9 +941,15 @@ TMPD=$(mktemp -d "${TMPDIR:-/tmp}/fprint-538d.XXXXXX")
 mkdir -p "${XDG_CACHE_HOME:-$HOME/.cache}" && LOG=${XDG_CACHE_HOME:-$HOME/.cache}/fprint-538d.log
 trap 'rm -rf "$TMPD"' EXIT
 
-case "$ACAO" in
-  instalar) principal_instalar ;;
-  desinstalar) principal_desinstalar ;;
-  ajustar) principal_ajustar ;;
-  menu) principal_menu ;;
-esac
+# Everything below runs only after bash has read the whole script, so it also works as
+# "... | bash": the keyboard becomes the standard input only then.
+principal() {
+  if [ "$TEM_TTY" = 1 ] && [ ! -t 0 ]; then exec 0<&3; fi
+  case "$ACAO" in
+    instalar) principal_instalar ;;
+    desinstalar) principal_desinstalar ;;
+    ajustar) principal_ajustar ;;
+    menu) principal_menu ;;
+  esac
+}
+principal; exit $?

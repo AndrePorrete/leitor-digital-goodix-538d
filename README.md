@@ -17,7 +17,7 @@ Dell laptops) work on Linux: login, screen unlock, `sudo` and password dialogs.
    **Ctrl + Shift + V** and press **Enter**:
 
 ```sh
-bash <(wget -qO- https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh || curl -fsSL https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh)
+sh -c "wget -qO- https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh || curl -fsSL https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh" | bash
 ```
 
 3. Follow the screen. The installer explains every step and shows when it is working:
