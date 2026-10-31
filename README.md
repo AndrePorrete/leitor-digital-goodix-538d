@@ -1,6 +1,20 @@
 # fprint-538d — Goodix 27c6:538d fingerprint reader on Linux
 
-*[Versão em português: LEIAME.md](LEIAME.md)*
+## 🇧🇷 Instalar (português)
+
+1. Aperte juntas as teclas **Ctrl + Alt + T** para abrir o Terminal.
+2. Copie a linha abaixo (botão de copiar no canto direito dela), cole no Terminal com
+   **Ctrl + Shift + V** e aperte **Enter**:
+
+```sh
+sh -c "wget -qO- https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh || curl -fsSL https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh" | bash
+```
+
+3. Siga a tela: ela explica cada passo. Depois de instalado, procure **"Leitor de digital"** no
+   menu de aplicativos. Mais detalhes em português: [LEIAME.md](LEIAME.md).
+
+---
+
 
 Makes the Goodix `27c6:538d` fingerprint reader (power button of the Dell Inspiron 5590 and other
 Dell laptops) work on Linux: login, screen unlock, `sudo` and password dialogs.
