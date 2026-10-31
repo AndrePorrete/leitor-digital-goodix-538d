@@ -17,9 +17,12 @@ Linux: dar comandos prontos para colar, explicar em linguagem simples, nunca sug
   ligar o ajuste PADRÃO de login com digital da distro (pam-auth-update fprintd / authselect / pam-config;
   Arch: não mexe). Nada de botão de ligar, perfil PAM próprio, teste rápido ou cadastro extra de ângulos.
   Versão 0.2.0 desfaz o que a 0.1.0 mudou (`desfazer_legado`).
-- Falta: dono rodar o instalador no Mint (o agente não pode alterar PAM), testar em Fedora/Arch reais,
-  revisar dados pessoais (e-mail no patch 0001 de libfprint/fprintd) e tornar o repo público + tag `v0.1.0`.
-  Requisitos originais em `PROTOCOLO.md` §7 e §7.1.
+- **Publicado (2026-10-31)**: repo PÚBLICO, release v0.3.2. Comando único no README/LEIAME
+  (`sh -c "wget … || curl …" | bash`); instalação guiada em 5 passos com animação de espera; menu
+  "Leitor de digital" (`/usr/local/bin/leitor-digital` + `.desktop`): cadastrar, testar, nível, apagar,
+  atualizar, desinstalar. Nível de reconhecimento 70/60/55 em `/etc/fprint-538d.conf`.
+  Histórico reescrito sem e-mail pessoal (backup: `~/.cache/fprint-538d-backup-historico.git`).
+- Falta: dono validar a v0.3.2 no Mint; relatos em Fedora/Arch reais.
 
 ## Ler antes
 1. `PROTOCOLO.md` — tudo o que foi feito, o que falhou e por quê, parâmetros finais.
