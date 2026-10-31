@@ -214,5 +214,28 @@ Requisitos levantados para Mint, CachyOS (Arch) e Bazzite (Fedora Atomic):
    backup; digitais em `/var/lib/fprint` (formato próprio do fork, não servem no fprintd original).
 10. Após instalar: guiar cadastro (15 toques, de leve) + cadastro de ângulos + `testar.sh`.
 
+### 7.1 Requisitos definidos pelo dono (2026-10-30)
+
+- **Abrangente em distros**, não só Mint/CachyOS/Bazzite. Alvo mínimo, por família:
+  - Debian/Ubuntu: Mint, Ubuntu, Pop!_OS, Zorin, elementary, Debian;
+  - Fedora: Workstation e as Atomic (Silverblue, Kinoite, Bazzite, Aurora, Bluefin);
+  - Arch: Arch, CachyOS, EndeavourOS, Manjaro;
+  - openSUSE: Tumbleweed e Leap.
+  Detectar a família por `/etc/os-release` (`ID`/`ID_LIKE`) e se é imutável (`rpm-ostree`,
+  `/run/ostree-booted`). Em distro desconhecida, explicar com clareza o que falta, sem quebrar nada.
+- **Para qualquer pessoa com o mesmo notebook e leitor**, não só para este:
+  - nada fixo deste notebook: sem caminhos do dono, sem usuário `porrete`, sem `DAC_OFFSET=8`
+    fixo (calibrar automaticamente, §7 item 7);
+  - checar antes de tudo: sensor `27c6:538d` presente, firmware compatível, conexão de rede,
+    espaço em disco; recusar com mensagem clara se não bater;
+  - **eficiente**: um comando só; de preferência pacote pré-compilado (releases do GitHub,
+    compilado em CI por contêiner), compilando localmente só como reserva;
+  - linguagem simples, em português e inglês, sem exigir conhecimento de Linux; mostrar progresso;
+  - cadastro guiado ao final (incluindo ângulos) e teste rápido de dedo certo/errado;
+  - idempotente (rodar de novo atualiza/repara) e com desinstalação completa que restaura PAM e
+    serviços a partir de backup;
+  - não deixar o usuário trancado fora do sistema: senha sempre continua valendo; validar PAM
+    antes de aplicar.
+
 Digitais cadastradas **não** migram entre formatos de comparador; após mudar o comparador é preciso
 recadastrar (a digital guarda as imagens, então reprocessar é possível no futuro).

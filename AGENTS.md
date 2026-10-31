@@ -6,7 +6,8 @@ Linux: dar comandos prontos para colar, explicar em linguagem simples, nunca sug
 ## Estado (2026-10-30)
 - Funciona no Dell Inspiron 5590 / Linux Mint 22.3: dedo certo 8/8, dedos errados 0/8 (máx. 38, limiar 60).
 - Instalado em `/opt/fprint-538d` + drop-ins em `/etc/systemd/system/fprintd.service.d/`.
-- Próxima tarefa: **instalador multi-distro** (Mint, CachyOS, Bazzite). Requisitos em `PROTOCOLO.md` §7.
+- Próxima tarefa: **instalador abrangente** (famílias Debian/Ubuntu, Fedora incl. Atomic/Bazzite, Arch/CachyOS, openSUSE)
+  para **qualquer pessoa** com Inspiron 5590 + Goodix 538d, eficiente e simples. Requisitos em `PROTOCOLO.md` §7 e §7.1.
 
 ## Ler antes
 1. `PROTOCOLO.md` — tudo o que foi feito, o que falhou e por quê, parâmetros finais.
