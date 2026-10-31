@@ -6,7 +6,9 @@
 #   Install / repair / update:  bash instalar.sh
 #   Uninstall:                  bash instalar.sh --desinstalar      (or --uninstall)
 #   Recognition level:          bash instalar.sh --ajustar          (or --tune)
-#   Options:                    --pacote FILE.tar.gz   use a local bundle instead of downloading
+#   Options:                    --nivel rigoroso|padrao|tolerante  recognition level without asking
+#                                 (also strict|default|tolerant; works with install and --ajustar)
+#                               --pacote FILE.tar.gz   use a local bundle instead of downloading
 #                               --compilar             build the bundle here (podman or docker)
 #                               --sem-cadastro         do not enroll a finger at the end
 #                               --sim                  answer every question with the default
@@ -331,8 +333,8 @@ voltar_atras() { # undo a failed install
   systemctl restart fprintd 2>/dev/null || true
 }
 
-raiz_instalar() { # pacote usuario pam(s/n)
-  local pacote=$1 usuario=$2 pam=$3 f r
+raiz_instalar() { # pacote usuario pam(s/n) [limiar, empty = keep]
+  local pacote=$1 usuario=$2 pam=$3 nivel=${4:-} f r
   mkdir -p "$ESTADO/backup"
   chmod 700 "$ESTADO"
   LOG=$ESTADO/instalar.log
@@ -367,6 +369,7 @@ EnvironmentFile=-$AJUSTE_CONF
 # Diagnostics (scores in the journal): uncomment, then systemctl restart fprintd
 #Environment=G_MESSAGES_DEBUG=libfprint-print
 EOF
+  if [ -n "$nivel" ]; then gravar_nivel "$nivel"; fi
   systemctl daemon-reload
   systemctl restart fprintd
 
@@ -420,9 +423,8 @@ raiz_desinstalar() { # apagar_digitais(s/n)
   ok "Removido. O sistema voltou ao fprintd original da distribuição." "Removed. The system is back to the distribution fprintd."
 }
 
-raiz_ajustar() { # limiar
-  [ -e "$DROPIN" ] || fim_erro "O fprint-538d não está instalado." "fprint-538d is not installed."
-  case "$1" in *[!0-9]* | '') exit 1 ;; esac
+gravar_nivel() { # limiar (no restart)
+  case "$1" in *[!0-9]* | '') return 1 ;; esac
   # installs from version 0.1.0 do not read the file yet
   grep -q '^EnvironmentFile=' "$DROPIN" || printf 'EnvironmentFile=-%s\n' "$AJUSTE_CONF" >>"$DROPIN"
   if [ "$1" = "$NIVEL_PADRAO" ]; then
@@ -435,6 +437,11 @@ FPRINT_BZ3_THRESHOLD=$1
 EOF
     chmod 644 "$AJUSTE_CONF"
   fi
+}
+
+raiz_ajustar() { # limiar
+  [ -e "$DROPIN" ] || fim_erro "O fprint-538d não está instalado." "fprint-538d is not installed."
+  gravar_nivel "$1" || exit 1
   systemctl daemon-reload
   systemctl restart fprintd 2>/dev/null || true
 }
@@ -577,10 +584,14 @@ principal_instalar() {
   titulo "Opções" "Options"
   perguntar "Usar a digital para entrar no sistema, desbloquear a tela, sudo e janelas de senha? (a senha continua valendo)" \
     "Use the fingerprint to log in, unlock the screen, sudo and password dialogs? (the password keeps working)" s || pam=n
+  NIVEL_ESCOLHIDO=$OPT_NIVEL
+  if [ -z "$OPT_NIVEL" ] && [ "$SIM" = 0 ] && [ "$TEM_TTY" = 1 ]; then
+    escolher_nivel "$(nivel_atual)"
+  fi
 
   obter_pacote
   titulo "Instalando (a senha de administrador será pedida uma vez)" "Installing (the administrator password is asked once)"
-  como_root instalar "$PACOTE_DIR" "$USER" "$pam"
+  como_root instalar "$PACOTE_DIR" "$USER" "$pam" "$NIVEL_ESCOLHIDO"
   local r=$?
   [ $r -eq 3 ] && exit 0
   [ $r -eq 0 ] || exit $r
@@ -603,27 +614,54 @@ nivel_atual() {
   echo "${v:-$NIVEL_PADRAO}"
 }
 
-principal_ajustar() {
-  [ -e "$DROPIN" ] || fim_erro "O fprint-538d não está instalado. Instale primeiro: bash instalar.sh" \
-    "fprint-538d is not installed. Install first: bash instalar.sh"
-  local atual esc novo i
-  atual=$(nivel_atual)
-  titulo "Nível de reconhecimento" "Recognition level"
+nivel_de_nome() { # name or number -> threshold
+  case "${1,,}" in
+    1 | rigoroso | strict) echo "${NIVEIS[0]}" ;;
+    2 | padrao | padrão | default) echo "${NIVEIS[1]}" ;;
+    3 | tolerante | tolerant) echo "${NIVEIS[2]}" ;;
+    *) return 1 ;;
+  esac
+}
+
+# Menu; sets NIVEL_ESCOLHIDO (empty = keep the current one)
+escolher_nivel() {
+  local atual=$1 esc i
   local nomes_pt=("Rigoroso — recusa mais, inclusive o seu dedo às vezes" "Padrão (recomendado)" "Tolerante — para dedos difíceis (calos, pele seca); aceita com nota menor")
   local nomes_en=("Strict — rejects more, sometimes your own finger too" "Default (recommended)" "Tolerant — for hard fingers (calluses, dry skin); accepts lower scores")
+  NIVEL_ESCOLHIDO=""
+  info "Nível de reconhecimento (dá para mudar depois com --ajustar):" "Recognition level (can be changed later with --tune):"
   for i in 0 1 2; do
     printf '      %d) %s  [%s]%s\n' $((i + 1)) "$(t "${nomes_pt[$i]}" "${nomes_en[$i]}")" "${NIVEIS[$i]}" \
       "$([ "${NIVEIS[$i]}" = "$atual" ] && t "  ← atual" "  ← current")"
   done
-  info "Nos testes, dedos errados tiraram no máximo 51; o nível Tolerante (55) ainda fica acima disso." \
-    "In the tests, wrong fingers scored at most 51; the Tolerant level (55) is still above that."
-  [ "$TEM_TTY" = 1 ] || fim_erro "Rode num terminal para escolher." "Run it in a terminal to choose."
-  printf '   %s ' "$(t "Número (Enter = manter):" "Number (Enter = keep):")"
+  info "Nos testes, dedos errados tiraram no máximo 51; o Tolerante (55) ainda fica acima disso." \
+    "In the tests, wrong fingers scored at most 51; Tolerant (55) is still above that."
+  printf '   %s%s%s ' "$C_N" "$(t "Número (Enter = manter o atual):" "Number (Enter = keep the current one):")" "$C_0"
   read -r esc <&3 || esc=""
-  case "$esc" in 1 | 2 | 3) novo=${NIVEIS[$((esc - 1))]} ;; *) info "Nada mudou." "Nothing changed."; return 0 ;; esac
-  [ "$novo" = "$atual" ] && { info "Nada mudou." "Nothing changed."; return 0; }
-  como_root ajustar "$novo" || exit 1
-  ok "Nível de reconhecimento: $novo (vale a partir do próximo toque)" "Recognition level: $novo (applies from the next touch)"
+  case "$esc" in 1 | 2 | 3) NIVEL_ESCOLHIDO=${NIVEIS[$((esc - 1))]} ;; esac
+  [ "$NIVEL_ESCOLHIDO" = "$atual" ] && NIVEL_ESCOLHIDO=""
+  return 0
+}
+
+principal_ajustar() {
+  [ -e "$DROPIN" ] || fim_erro "O fprint-538d não está instalado. Instale primeiro: bash instalar.sh" \
+    "fprint-538d is not installed. Install first: bash instalar.sh"
+  local atual
+  atual=$(nivel_atual)
+  titulo "Nível de reconhecimento" "Recognition level"
+  if [ -n "$OPT_NIVEL" ]; then
+    NIVEL_ESCOLHIDO=$OPT_NIVEL
+  else
+    [ "$TEM_TTY" = 1 ] || fim_erro "Rode num terminal, ou use --nivel tolerante|padrao|rigoroso." \
+      "Run it in a terminal, or use --nivel tolerant|default|strict."
+    escolher_nivel "$atual"
+  fi
+  if [ -z "$NIVEL_ESCOLHIDO" ] || [ "$NIVEL_ESCOLHIDO" = "$atual" ]; then
+    info "Nada mudou (nível $atual)." "Nothing changed (level $atual)."
+    return 0
+  fi
+  como_root ajustar "$NIVEL_ESCOLHIDO" || exit 1
+  ok "Nível de reconhecimento: $NIVEL_ESCOLHIDO (vale a partir do próximo toque)" "Recognition level: $NIVEL_ESCOLHIDO (applies from the next touch)"
 }
 
 principal_desinstalar() {
@@ -646,11 +684,15 @@ principal_desinstalar() {
 [ "${FPRINT538D_SO_FUNCOES:-}" = 1 ] && return 0
 
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
-ACAO=instalar OPT_PACOTE="" OPT_COMPILAR=0 OPT_SEM_CADASTRO=0
+ACAO=instalar OPT_PACOTE="" OPT_COMPILAR=0 OPT_SEM_CADASTRO=0 OPT_NIVEL="" NIVEL_ESCOLHIDO=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --desinstalar | --uninstall) ACAO=desinstalar ;;
     --ajustar | --tune) ACAO=ajustar ;;
+    --nivel | --level)
+      OPT_NIVEL=$(nivel_de_nome "${2:-}") || fim_erro "Nível desconhecido: ${2:-} (use rigoroso, padrao ou tolerante)" \
+        "Unknown level: ${2:-} (use strict, default or tolerant)"
+      shift ;;
     --pacote | --bundle) OPT_PACOTE=$(readlink -f "${2:-}"); shift ;;
     --compilar | --build) OPT_COMPILAR=1 ;;
     --sem-cadastro | --no-enroll) OPT_SEM_CADASTRO=1 ;;
@@ -667,7 +709,7 @@ while [ $# -gt 0 ]; do
         *) exit 1 ;;
       esac
       exit $? ;;
-    -h | --help | --ajuda) sed -n '2,16p' "$SELF"; exit 0 ;;
+    -h | --help | --ajuda) sed -n '2,18p' "$SELF"; exit 0 ;;
     *) fim_erro "Opção desconhecida: $1" "Unknown option: $1" ;;
   esac
   shift

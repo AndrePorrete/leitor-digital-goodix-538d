@@ -49,11 +49,14 @@ leitor reconhece mal. Nesse caso:
 
 1. **Cadastre os dedos com menos calo** (por exemplo, os que não apertam as cordas). Pode cadastrar
    vários: qualquer um deles é aceito.
-2. **Ajuste o nível de reconhecimento:**
+2. **Escolha o nível de reconhecimento** — o instalador pergunta durante a instalação; para mudar
+   depois:
 
    ```sh
    bash /opt/fprint-538d/share/fprint-538d/instalar.sh --ajustar
    ```
+
+   Sem perguntas: `--nivel tolerante` (ou `padrao`, `rigoroso`), na instalação ou junto com `--ajustar`.
 
    | Nível | Nota mínima | Quando usar |
    |---|---|---|

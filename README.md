@@ -50,11 +50,13 @@ poorly. Then:
 
 1. **Enroll the fingers with fewer calluses** (e.g. the ones that do not press strings). You can
    enroll several: any of them is accepted.
-2. **Tune the recognition level:**
+2. **Choose the recognition level** — the installer asks during installation; to change it later:
 
    ```sh
    bash /opt/fprint-538d/share/fprint-538d/instalar.sh --tune
    ```
+
+   Without questions: `--level tolerant` (or `default`, `strict`), on install or with `--tune`.
 
    | Level | Minimum score | When |
    |---|---|---|
