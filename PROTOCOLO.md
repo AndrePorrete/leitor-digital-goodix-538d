@@ -237,5 +237,19 @@ Requisitos levantados para Mint, CachyOS (Arch) e Bazzite (Fedora Atomic):
   - não deixar o usuário trancado fora do sistema: senha sempre continua valendo; validar PAM
     antes de aplicar.
 
+- **Outros notebooks com o mesmo leitor** (decisão do dono, 2026-10-30): aceitar qualquer máquina com
+  `27c6:538d` + firmware compatível, não só o Inspiron 5590. Modelos Dell conhecidos com esse sensor:
+  Inspiron 5590, 5402, 5409, 3501, 7506; Latitude 3410; Vostro 3500 (lista a ampliar).
+  - identificar o modelo por `/sys/class/dmi/id/product_name` só para informar e ajustar extras;
+    o critério de instalação é o sensor, não o modelo;
+  - ajuste do botão de ligar (logind + ambiente gráfico) **só** onde o leitor fica no botão
+    (perguntar ao usuário quando o modelo não estiver na lista);
+  - calibração automática é obrigatória (o sensor do 5590 precisou de DAC +8; o do 3501, 0).
+- **Repositório será aberto ao público quando estiver pronto**: README principal em inglês
+  (com versão em português), licenças corretas (LGPL/GPL dos patches; escolher licença para os
+  scripts, ex. GPL-2.0+), créditos (BaptistePignier/goodix-538d, goodix-fp-linux-dev, infinytum,
+  01xcampos), seção de compatibilidade/relato de resultados por modelo (issues), sem dados pessoais
+  nem biométricos no histórico do git, sem e-mail pessoal nos patches (revisar antes de publicar).
+
 Digitais cadastradas **não** migram entre formatos de comparador; após mudar o comparador é preciso
 recadastrar (a digital guarda as imagens, então reprocessar é possível no futuro).
