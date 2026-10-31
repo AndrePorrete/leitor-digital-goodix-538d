@@ -6,14 +6,20 @@ Linux: dar comandos prontos para colar, explicar em linguagem simples, nunca sug
 ## Estado (2026-10-30)
 - Funciona no Dell Inspiron 5590 / Linux Mint 22.3: dedo certo 8/8, dedos errados 0/8 (máx. 38, limiar 60).
 - Instalado em `/opt/fprint-538d` + drop-ins em `/etc/systemd/system/fprintd.service.d/`.
-- Próxima tarefa: **instalador abrangente** (famílias Debian/Ubuntu, Fedora incl. Atomic/Bazzite, Arch/CachyOS, openSUSE)
-  para **qualquer pessoa** com o leitor Goodix 538d (Inspiron 5590/5402/5409/3501/7506, Latitude 3410, Vostro 3500...),
-  eficiente e simples. O repo será **público** quando pronto (revisar dados pessoais antes). Requisitos em `PROTOCOLO.md` §7 e §7.1.
+- **Instalador novo pronto, falta validar no hardware** (2026-10-31): `instalar.sh` (um arquivo; baixa
+  `fprint-538d-x86_64.tar.gz` das releases ou usa `--pacote`; parte root via sudo/pkexec com `--interno`).
+  Pacote: `construir/construir.sh` (contêiner ubuntu:22.04, OpenCV/OpenSSL estáticos; deps só glib, gusb, polkit).
+  CI: `.github/workflows/pacote.yml` (compila, testa carga em 8 distros, release em tag `v*`).
+  PAM testado em contêiner (Ubuntu, Debian, Fedora, Arch, Tumbleweed, Leap): `construir/testar-pam.sh`.
+  Calibração DAC automática (patch 0002) — escolhe 7–8 neste sensor (simulado com os dumps).
+- Falta: dono rodar o instalador no Mint (o agente não pode alterar PAM), testar em Fedora/Arch reais,
+  revisar dados pessoais (e-mail no patch 0001 de libfprint/fprintd) e tornar o repo público + tag `v0.1.0`.
+  Requisitos originais em `PROTOCOLO.md` §7 e §7.1.
 
 ## Ler antes
 1. `PROTOCOLO.md` — tudo o que foi feito, o que falhou e por quê, parâmetros finais.
 2. `patches/` — mudanças sobre BaptistePignier/libfprint `goodix53xd-sigfm@d9f3ee1` e fprintd `v1.94.5`.
-3. `ferramentas/instalar-sigfm.sh` — instalador atual (só Debian/Ubuntu, base para o novo).
+3. `instalar.sh` + `construir/` — instalador multi-distro e geração do pacote.
 4. Upstream com detalhes do protocolo USB/driver: github.com/BaptistePignier/goodix-538d (`AGENTS.md`).
 
 ## Regras rígidas
