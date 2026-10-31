@@ -30,3 +30,9 @@ Linux: dar comandos prontos para colar, explicar em linguagem simples, nunca sug
   Build: `ninja -C libfprint/build-opt` e `ninja -C fprintd/build`.
 - Ver notas ao vivo: `journalctl -u fprintd -f | grep "best score"`.
 - Leitor fica no botão de ligar: avisar para encostar de leve.
+
+## Pendências combinadas com o dono
+- **Depois que o instalador estiver pronto e validado**: apagar as imagens de digital usadas na análise
+  (`~/.cache/instalar-goodix/{dump-real,dump-2053,dump-2113,coleta-1621,dumps}` e `*.npy`/`*.npz` ali),
+  com `gio trash` e avisando o dono. Até lá, servem para validar o comparador.
+- Modo de diagnóstico já desligado (2026-10-30); reativar só se precisar: ver `PROTOCOLO.md` §5.
