@@ -25,9 +25,11 @@ O instalador:
 3. pede sua senha **uma vez** e instala em `/opt/fprint-538d`, ao lado do `fprintd` da sua
    distribuição (nenhum arquivo da distribuição é sobrescrito);
 4. confere o firmware do leitor e desfaz tudo se não for compatível;
-5. se você quiser, ativa a digital no login, desbloqueio de tela, `sudo` e janelas de senha
-   (**a senha continua valendo sempre**) e faz o toque leve no botão de ligar não desligar o notebook;
-6. guia o cadastro do dedo e um teste rápido com dedo certo e dedo errado.
+5. se você quiser, liga a digital no login, desbloqueio de tela, `sudo` e janelas de senha usando
+   **o ajuste padrão da própria distribuição** — **a senha continua valendo sempre**;
+6. guia o cadastro de um dedo (outros dedos depois, nas Configurações do sistema).
+
+Nada mais no sistema é alterado. Depois de formatar: rodar o instalador, cadastrar, pronto.
 
 Rodar de novo atualiza ou repara a instalação, mantendo as digitais.
 
@@ -37,8 +39,8 @@ Rodar de novo atualiza ou repara a instalação, mantendo as digitais.
 bash /opt/fprint-538d/share/fprint-538d/instalar.sh --desinstalar
 ```
 
-Dicas: **encoste de leve** (apertar deforma a digital e pode acionar o botão de ligar) e faça o
-segundo cadastro que o instalador oferece (mesmo dedo, girado) para ser aceito em mais ângulos.
+Dicas: **encoste de leve** (apertar deforma a digital) e, no cadastro, varie a posição e gire um
+pouco o dedo, para ele ser reconhecido em mais ângulos.
 
 ## Compatibilidade
 
@@ -46,7 +48,7 @@ segundo cadastro que o instalador oferece (mesmo dedo, girado) para ser aceito e
 |---|---|---|
 | Debian/Ubuntu | Ubuntu, Linux Mint, Pop!_OS, Zorin, elementary, Debian 12+ | `pam-auth-update` |
 | Fedora | Workstation; Atomic: Silverblue, Kinoite, Bazzite, Aurora, Bluefin | `authselect` |
-| Arch | Arch, CachyOS, EndeavourOS, Manjaro | linhas em `sudo`, `polkit-1`, `system-local-login` |
+| Arch | Arch, CachyOS, EndeavourOS, Manjaro | sem ajuste padrão: login e bloqueio do GNOME/KDE usam sozinhos; `sudo` precisa de uma linha manual ([wiki do Arch](https://wiki.archlinux.org/title/Fprint)) |
 | openSUSE | Tumbleweed, Leap 15.6, Aeon/Kalpa | `pam-config` |
 
 Testado até agora: Linux Mint 22.3 num Inspiron 5590. As outras distribuições são verificadas

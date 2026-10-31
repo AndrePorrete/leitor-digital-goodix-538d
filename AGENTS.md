@@ -12,6 +12,11 @@ Linux: dar comandos prontos para colar, explicar em linguagem simples, nunca sug
   CI: `.github/workflows/pacote.yml` (compila, testa carga em 8 distros, release em tag `v*`).
   PAM testado em contêiner (Ubuntu, Debian, Fedora, Arch, Tumbleweed, Leap): `construir/testar-pam.sh`.
   Calibração DAC automática (patch 0002) — escolhe 7–8 neste sensor (simulado com os dumps).
+  Confirmado ao vivo no 5590: `Finger DAC offset 0 -> 5 -> 8`.
+- **Decisão do dono (2026-10-31): instalador "como um fabricante"** — só driver + pacotes da distro +
+  ligar o ajuste PADRÃO de login com digital da distro (pam-auth-update fprintd / authselect / pam-config;
+  Arch: não mexe). Nada de botão de ligar, perfil PAM próprio, teste rápido ou cadastro extra de ângulos.
+  Versão 0.2.0 desfaz o que a 0.1.0 mudou (`desfazer_legado`).
 - Falta: dono rodar o instalador no Mint (o agente não pode alterar PAM), testar em Fedora/Arch reais,
   revisar dados pessoais (e-mail no patch 0001 de libfprint/fprintd) e tornar o repo público + tag `v0.1.0`.
   Requisitos originais em `PROTOCOLO.md` §7 e §7.1.

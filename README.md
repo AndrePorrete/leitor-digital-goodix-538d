@@ -25,10 +25,12 @@ The installer:
 3. asks for your password **once** and installs it in `/opt/fprint-538d`, next to your
    distribution's `fprintd` (no distribution file is overwritten);
 4. checks the reader firmware and undoes everything if it is not compatible;
-5. optionally enables the fingerprint for login, screen unlock, `sudo` and password dialogs
-   (**your password always keeps working**), and stops a light touch on the power button from
-   turning the laptop off;
-6. guides you through enrollment and a quick right-finger / wrong-finger test.
+5. optionally turns on fingerprint login (login, screen unlock, `sudo`, password dialogs) using
+   **your distribution's own standard switch** — **your password always keeps working**;
+6. guides you through enrolling one finger (more fingers later in the system Settings).
+
+Nothing else on the system is changed. After reinstalling the system: run the installer, enroll,
+done.
 
 Running it again updates or repairs the installation and keeps your fingerprints.
 
@@ -38,8 +40,8 @@ Running it again updates or repairs the installation and keeps your fingerprints
 bash /opt/fprint-538d/share/fprint-538d/instalar.sh --uninstall
 ```
 
-Tips: **touch lightly** (pressing distorts the print and may trigger the power button), and do the
-second enrollment the installer offers (same finger, rotated) so it is accepted at more angles.
+Tips: **touch lightly** (pressing distorts the print), and during enrollment vary the position and
+rotate the finger a little, so it is recognised at more angles.
 
 ## Supported
 
@@ -47,7 +49,7 @@ second enrollment the installer offers (same finger, rotated) so it is accepted 
 |---|---|---|
 | Debian/Ubuntu | Ubuntu, Linux Mint, Pop!_OS, Zorin, elementary, Debian 12+ | `pam-auth-update` |
 | Fedora | Workstation; Atomic: Silverblue, Kinoite, Bazzite, Aurora, Bluefin | `authselect` |
-| Arch | Arch, CachyOS, EndeavourOS, Manjaro | lines in `sudo`, `polkit-1`, `system-local-login` |
+| Arch | Arch, CachyOS, EndeavourOS, Manjaro | no standard switch: GNOME/KDE login and lock screens use it on their own; `sudo` needs a manual line ([Arch wiki](https://wiki.archlinux.org/title/Fprint)) |
 | openSUSE | Tumbleweed, Leap 15.6, Aeon/Kalpa | `pam-config` |
 
 Tested so far: Linux Mint 22.3 on an Inspiron 5590. The other distributions are checked

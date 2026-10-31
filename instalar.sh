@@ -7,7 +7,7 @@
 #   Uninstall:                  bash instalar.sh --desinstalar      (or --uninstall)
 #   Options:                    --pacote FILE.tar.gz   use a local bundle instead of downloading
 #                               --compilar             build the bundle here (podman or docker)
-#                               --sem-cadastro         do not enroll / test fingers at the end
+#                               --sem-cadastro         do not enroll a finger at the end
 #                               --sim                  answer every question with the default
 #                               --lang pt|en
 # Run as your normal user (not with sudo): the password is asked once, for the system part.
@@ -21,16 +21,13 @@ ESTADO=/var/lib/fprint-538d
 DROPIN_DIR=/etc/systemd/system/fprintd.service.d
 DROPIN=$DROPIN_DIR/fprint-538d.conf
 DROPINS_ANTIGOS="goodix-538d.conf calibracao.conf" # manual install of the first version
-LOGIND_CONF=/etc/systemd/logind.conf.d/fprint-538d-botao.conf
-PERFIL_DEBIAN=/usr/share/pam-configs/fprint-538d
-MARCA="# fprint-538d"
-LINHA_PAM_MANUAL="auth       sufficient   pam_fprintd.so max-tries=3 timeout=20 $MARCA"
-ARQUIVOS_PAM_MANUAL="sudo polkit-1 system-local-login"
+# Left by version 0.1.0 (own PAM profile / lines, power button): removed on update and uninstall
+LEGADO_LOGIND=/etc/systemd/logind.conf.d/fprint-538d-botao.conf
+LEGADO_PERFIL=/usr/share/pam-configs/fprint-538d
+LEGADO_MARCA="# fprint-538d"
+LEGADO_PAM_ARQUIVOS="sudo polkit-1 system-local-login"
 USB_VENDOR=27c6
 USB_PRODUCT=538d
-# Models where the reader is the power button (others: the user is asked)
-MODELOS_BOTAO="Inspiron 5590|Inspiron 5402|Inspiron 5409|Inspiron 3501|Inspiron 7506|Latitude 3410|Vostro 3500"
-DEDO_ANGULOS=left-little-finger # spare slot for the second enrollment (different angles)
 
 # ---------------------------------------------------------------------------------------------
 # Messages (Portuguese / English)
@@ -113,7 +110,6 @@ sensor_presente() {
 }
 
 modelo() { cat /sys/class/dmi/id/product_name 2>/dev/null || echo "?"; }
-leitor_no_botao() { modelo | grep -qE "$MODELOS_BOTAO"; }
 
 modulo_pam_fprintd() {
   local f
@@ -208,7 +204,7 @@ testar_servico() {
   esac
   saida=$(busctl --system --timeout=30 call net.reactivated.Fprint "$dev" net.reactivated.Fprint.Device Claim s "" 2>&1)
   local r=$?
-  busctl --system call net.reactivated.Fprint "$dev" net.reactivated.Fprint.Device Release >/dev/null 2>&1
+  # the claim ends with the busctl connection
   if [ $r -ne 0 ]; then
     case "$saida" in
       *laimed*) echo "BUSY $saida"; return 0 ;;
@@ -218,57 +214,30 @@ testar_servico() {
   echo "OK"
 }
 
-# --- PAM -----------------------------------------------------------------------------------
+# --- PAM: only the distribution's own fingerprint login switch ------------------------------------
 
 pam_backup() {
-  mkdir -p "$ESTADO/backup"
   local dirs=(etc/pam.d)
   [ -d /var/lib/pam ] && dirs+=(var/lib/pam)
+  mkdir -p "$ESTADO/backup"
   [ -e "$ESTADO/backup/pam.tar" ] || tar -cf "$ESTADO/backup/pam.tar" -C / "${dirs[@]}" 2>/dev/null
 }
 
+# Debian/Ubuntu/Mint: libpam-fprintd ships the "fprintd" pam-auth-update profile (off by default)
 pam_debian() {
-  local outros="" p nome
   command -v pam-auth-update >/dev/null || return 1
-  for p in /usr/share/pam-configs/*; do
-    nome=${p##*/}
-    [ "$nome" = fprint-538d ] && continue
-    grep -q pam_fprintd "$p" 2>/dev/null && outros="$outros $nome"
-  done
-  cat >"$PERFIL_DEBIAN" <<'EOF'
-Name: Fingerprint authentication (fprint-538d, Goodix 538d)
-Default: yes
-Priority: 260
-Auth-Type: Primary
-Auth:
-	[success=end default=ignore]	pam_fprintd.so max-tries=3 timeout=20
-Auth-Initial:
-	[success=end default=ignore]	pam_fprintd.so max-tries=3 timeout=20
-EOF
-  # other fingerprint profiles (libpam-fprintd, Fingwit) would ask twice: switched off, restored on uninstall
-  if [ -z "$(estado_get PAM_REGISTRADO)" ]; then
-    grep -q pam_fprintd /etc/pam.d/common-auth 2>/dev/null && estado_set PAM_DESATIVADOS "${outros# }"
-    estado_set PAM_REGISTRADO 1
-  fi
-  export DEBIAN_FRONTEND=noninteractive
-  # shellcheck disable=SC2086
-  if [ -n "$outros" ]; then pam-auth-update --disable $outros || return 1; fi
-  pam-auth-update --enable fprint-538d || return 1
-  [ "$(grep -c pam_fprintd /etc/pam.d/common-auth)" = 1 ] &&
-    grep -q 'pam_fprintd.so max-tries=3 timeout=20' /etc/pam.d/common-auth &&
-    grep -q pam_unix /etc/pam.d/common-auth
+  grep -q pam_fprintd /etc/pam.d/common-auth 2>/dev/null && return 0 # already on (distro, Fingwit...)
+  [ -e /usr/share/pam-configs/fprintd ] || return 1
+  DEBIAN_FRONTEND=noninteractive pam-auth-update --enable fprintd || return 1
+  estado_set PAM_ATIVOU 1
+  grep -q pam_fprintd /etc/pam.d/common-auth && grep -q pam_unix /etc/pam.d/common-auth
 }
 pam_debian_desfazer() {
-  local outros
-  outros=$(estado_get PAM_DESATIVADOS)
-  export DEBIAN_FRONTEND=noninteractive
-  pam-auth-update --disable fprint-538d 2>/dev/null
-  rm -f "$PERFIL_DEBIAN"
-  # shellcheck disable=SC2086
-  [ -z "$outros" ] || pam-auth-update --enable $outros
-  pam-auth-update --package >/dev/null 2>&1 || true
+  [ "$(estado_get PAM_ATIVOU)" = 1 ] && DEBIAN_FRONTEND=noninteractive pam-auth-update --disable fprintd
+  return 0
 }
 
+# Fedora (also Atomic): authselect feature
 pam_fedora() {
   command -v authselect >/dev/null && authselect current >/dev/null 2>&1 || return 1
   if authselect current | grep -q with-fingerprint; then return 0; fi
@@ -278,6 +247,7 @@ pam_fedora() {
 }
 pam_fedora_desfazer() { [ "$(estado_get PAM_ATIVOU)" = 1 ] && authselect disable-feature with-fingerprint >/dev/null; return 0; }
 
+# openSUSE: pam-config module
 pam_suse() {
   command -v pam-config >/dev/null || return 1
   pam-config -q --fprintd 2>/dev/null | grep -q fprintd && return 0
@@ -286,47 +256,27 @@ pam_suse() {
 }
 pam_suse_desfazer() { [ "$(estado_get PAM_ATIVOU)" = 1 ] && pam-config -d --fprintd; return 0; }
 
-# Arch and others: one marked line on top of the auth section of a few files
-pam_manual() {
-  local nome f criados editados=""
-  criados=$(estado_get PAM_CRIADOS)
-  for nome in $ARQUIVOS_PAM_MANUAL; do
-    f=/etc/pam.d/$nome
-    if [ ! -e "$f" ]; then
-      [ -e "/usr/lib/pam.d/$nome" ] || continue
-      cp "/usr/lib/pam.d/$nome" "$f"
-      criados="$criados $nome"
-    fi
-    grep -q pam_fprintd "$f" && continue
-    grep -qE '^\s*(auth|-?auth|@include)' "$f" || continue
-    awk -v linha="$LINHA_PAM_MANUAL" 'BEGIN{feito=0} !feito && /^[[:space:]]*-?auth[[:space:]]/ {print linha; feito=1} {print} END{if(!feito) print linha}' "$f" >"$f.fprint-538d.tmp" &&
-      cat "$f.fprint-538d.tmp" >"$f" && rm -f "$f.fprint-538d.tmp"
-    editados="$editados $nome"
-  done
-  estado_set PAM_CRIADOS "${criados# }"
-  [ -n "$editados" ] || grep -qs pam_fprintd /etc/pam.d/sudo
-}
-pam_manual_desfazer() {
-  local nome
-  for nome in $ARQUIVOS_PAM_MANUAL; do
-    [ -e "/etc/pam.d/$nome" ] && sed -i "/$MARCA\$/d" "/etc/pam.d/$nome"
-  done
-  for nome in $(estado_get PAM_CRIADOS); do rm -f "/etc/pam.d/$nome"; done
-}
-
 configurar_pam() {
   local metodo
-  case "$FAMILIA" in debian) metodo=debian ;; fedora) metodo=fedora ;; suse) metodo=suse ;; *) metodo=manual ;; esac
+  case "$FAMILIA" in
+    debian | fedora | suse) metodo=$FAMILIA ;;
+    *)
+      info "Esta distribuição não tem um ajuste padrão de login com digital: a tela de login e o bloqueio de tela" \
+        "This distribution has no standard fingerprint login switch: the GNOME/KDE login and lock screens"
+      info "do GNOME/KDE já usam a digital sozinhos; para o sudo, veja o README." \
+        "use the fingerprint on their own; for sudo, see the README."
+      return 0 ;;
+  esac
   modulo_pam_fprintd >/dev/null || { aviso "Módulo pam_fprintd não encontrado: digital no login não foi ativada." \
     "pam_fprintd module not found: fingerprint login was not enabled."; return 0; }
   pam_backup
   estado_set PAM_METODO "$metodo"
   if "pam_$metodo"; then
-    ok "Digital ativada no login, desbloqueio de tela, sudo e janelas de senha (a senha continua valendo)" \
-      "Fingerprint enabled for login, screen unlock, sudo and password dialogs (the password keeps working)"
+    ok "Digital ativada no login, desbloqueio de tela, sudo e janelas de senha (pelo ajuste padrão da distribuição; a senha continua valendo)" \
+      "Fingerprint enabled for login, screen unlock, sudo and password dialogs (distribution standard switch; the password keeps working)"
   else
-    aviso "Não consegui ativar a digital no login automaticamente; desfazendo essa parte. O leitor funciona; veja o README." \
-      "Could not enable fingerprint login automatically; undoing that part. The reader works; see the README."
+    aviso "Não consegui ligar a digital no login pelo ajuste padrão da distribuição; nada foi mudado nessa parte." \
+      "Could not enable fingerprint login through the distribution switch; nothing was changed there."
     "pam_${metodo}_desfazer" >/dev/null 2>&1
     estado_set PAM_METODO ""
   fi
@@ -334,8 +284,34 @@ configurar_pam() {
 desfazer_pam() {
   local metodo
   metodo=$(estado_get PAM_METODO)
-  [ -n "$metodo" ] || return 0
-  "pam_${metodo}_desfazer" && ok "Login com digital desativado (configuração de login restaurada)" "Fingerprint login disabled (login configuration restored)"
+  [ -n "$metodo" ] && [ "$(estado_get PAM_ATIVOU)" = 1 ] || return 0
+  "pam_${metodo}_desfazer" && ok "Login com digital desligado (como era antes)" "Fingerprint login switched off (as it was before)"
+}
+
+# Version 0.1.0 had its own PAM profile / marked lines and changed the power button
+desfazer_legado() {
+  local nome
+  if [ -e "$LEGADO_PERFIL" ]; then
+    # back to the PAM state saved before 0.1.0 touched it
+    if [ -e "$ESTADO/backup/pam.tar" ]; then
+      tar -xf "$ESTADO/backup/pam.tar" -C / etc/pam.d/common-auth etc/pam.d/common-account etc/pam.d/common-password \
+        etc/pam.d/common-session etc/pam.d/common-session-noninteractive var/lib/pam 2>/dev/null
+    fi
+    rm -f "$LEGADO_PERFIL"
+    ok "Perfil de login próprio da versão anterior removido (configuração original restaurada)" \
+      "Own login profile of the previous version removed (original configuration restored)"
+  fi
+  for nome in $LEGADO_PAM_ARQUIVOS; do
+    [ -e "/etc/pam.d/$nome" ] && grep -q "$LEGADO_MARCA\$" "/etc/pam.d/$nome" && sed -i "/$LEGADO_MARCA\$/d" "/etc/pam.d/$nome"
+  done
+  for nome in $(estado_get PAM_CRIADOS); do rm -f "/etc/pam.d/$nome"; done
+  if [ -e "$LEGADO_LOGIND" ]; then
+    rm -f "$LEGADO_LOGIND"
+    ok "Ajuste do botão de ligar da versão anterior removido" "Power button setting of the previous version removed"
+  fi
+  case "$(estado_get PAM_METODO)" in debian | manual) [ "$(estado_get PAM_ATIVOU)" = 1 ] || estado_set PAM_METODO "" ;; esac
+  [ -e "$ESTADO/estado" ] && sed -i '/^PAM_DESATIVADOS=/d; /^PAM_REGISTRADO=/d; /^PAM_CRIADOS=/d' "$ESTADO/estado"
+  return 0
 }
 
 # --- main root actions ------------------------------------------------------------------------
@@ -350,8 +326,8 @@ voltar_atras() { # undo a failed install
   systemctl restart fprintd 2>/dev/null || true
 }
 
-raiz_instalar() { # pacote usuario pam(s/n) botao(s/n)
-  local pacote=$1 usuario=$2 pam=$3 botao=$4 f r
+raiz_instalar() { # pacote usuario pam(s/n)
+  local pacote=$1 usuario=$2 pam=$3 f r
   mkdir -p "$ESTADO/backup"
   chmod 700 "$ESTADO"
   LOG=$ESTADO/instalar.log
@@ -391,7 +367,7 @@ EOF
   r=$(testar_servico)
   case "$r" in
     OK) ok "Leitor aberto pelo novo driver (firmware compatível, calibração automática)" "Reader opened by the new driver (compatible firmware, automatic calibration)" ;;
-    BUSY*) aviso "Leitor em uso por outro programa (fechei nada); a verificação será no cadastro." "Reader busy in another program; it will be checked during enrollment." ;;
+    BUSY*) aviso "Leitor em uso por outro programa; a verificação será no cadastro." "Reader busy in another program; it will be checked during enrollment." ;;
     *)
       log "check failed: $r"
       voltar_atras
@@ -405,20 +381,10 @@ EOF
   esac
   rm -rf "$PREFIXO.antigo"
 
+  desfazer_legado
   if [ "$pam" = s ]; then
     titulo "Login com digital" "Fingerprint login"
     configurar_pam
-  fi
-  if [ "$botao" = s ]; then
-    mkdir -p "$(dirname "$LOGIND_CONF")"
-    cat >"$LOGIND_CONF" <<'EOF'
-# fprint-538d: the fingerprint reader is the power button; a firm touch would turn off/suspend.
-# A short press does nothing; holding it 4+ seconds still forces power off.
-[Login]
-HandlePowerKey=ignore
-EOF
-    ok "Botão de ligar: toque curto não desliga mais (vale na tela de login após reiniciar)" \
-      "Power button: a short press no longer powers off (login screen, after reboot)"
   fi
 
   estado_set VERSAO "$(cat "$PREFIXO/share/fprint-538d/VERSAO" 2>/dev/null)"
@@ -431,7 +397,8 @@ raiz_desinstalar() { # apagar_digitais(s/n)
   LOG=$ESTADO/instalar.log
   titulo "Removendo o fprint-538d" "Removing fprint-538d"
   desfazer_pam
-  rm -f "$LOGIND_CONF" "$DROPIN"
+  desfazer_legado
+  rm -f "$DROPIN"
   for f in $DROPINS_ANTIGOS; do rm -f "$DROPIN_DIR/$f"; done
   rmdir "$DROPIN_DIR" 2>/dev/null
   selinux_desfazer
@@ -525,63 +492,7 @@ verificar() {
   [ "${livre:-100}" -ge 50 ] || fim_erro "Pouco espaço livre em disco (preciso de 50 MB)." "Not enough disk space (50 MB needed)."
 }
 
-# --- desktop power button (per user) -----------------------------------------------------------
-
-botao_desktop() { # aplicar|desfazer
-  local cfg=${XDG_CONFIG_HOME:-$HOME/.config}/fprint-538d/botao-antes
-  local de=${XDG_CURRENT_DESKTOP:-}
-  if [ "$1" = desfazer ]; then
-    [ -r "$cfg" ] || return 0
-    local tipo esquema chave valor
-    while IFS='|' read -r tipo esquema chave valor; do
-      case "$tipo" in
-        gsettings) gsettings set "$esquema" "$chave" "$valor" 2>/dev/null ;;
-        kde) for g in AC Battery LowBattery; do "$esquema" --file powerdevilrc --group "$g" --group SuspendAndShutdown --key PowerButtonAction --delete 2>/dev/null; done ;;
-        xfce) xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/power-button-action -s "$valor" 2>/dev/null ;;
-      esac
-    done <"$cfg"
-    rm -f "$cfg"
-    return 0
-  fi
-  mkdir -p "$(dirname "$cfg")"
-  local feito=0 kw
-  : >"$cfg.novo"
-  case "${de^^}" in
-    *CINNAMON* | *GNOME* | *UNITY* | *BUDGIE* | *MATE*)
-      local esquema chave
-      case "${de^^}" in
-        *CINNAMON*) esquema=org.cinnamon.settings-daemon.plugins.power chave=button-power ;;
-        *MATE*) esquema=org.mate.power-manager chave=button-power ;;
-        *) esquema=org.gnome.settings-daemon.plugins.power chave=power-button-action ;;
-      esac
-      if command -v gsettings >/dev/null && gsettings get "$esquema" "$chave" >/dev/null 2>&1; then
-        [ -r "$cfg" ] || echo "gsettings|$esquema|$chave|$(gsettings get "$esquema" "$chave")" >>"$cfg.novo"
-        gsettings set "$esquema" "$chave" nothing && feito=1
-      fi ;;
-    *KDE*)
-      kw=$(command -v kwriteconfig6 || command -v kwriteconfig5)
-      if [ -n "$kw" ]; then
-        [ -r "$cfg" ] || echo "kde|$kw||" >>"$cfg.novo"
-        for g in AC Battery LowBattery; do "$kw" --file powerdevilrc --group "$g" --group SuspendAndShutdown --key PowerButtonAction 0; done
-        feito=1
-      fi ;;
-    *XFCE*)
-      if command -v xfconf-query >/dev/null; then
-        [ -r "$cfg" ] || echo "xfce|||$(xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/power-button-action 2>/dev/null || echo 3)" >>"$cfg.novo"
-        xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/power-button-action -n -t uint -s 0 2>/dev/null ||
-          xfconf-query -c xfce4-power-manager -p /xfce4-power-manager/power-button-action -s 0 && feito=1
-      fi ;;
-  esac
-  if [ -s "$cfg.novo" ]; then mv "$cfg.novo" "$cfg"; else rm -f "$cfg.novo"; fi
-  if [ $feito = 1 ]; then
-    ok "Botão de ligar na área de trabalho: toque não desliga nem suspende" "Desktop power button: a touch no longer powers off or suspends"
-  else
-    aviso "Ajuste o botão de ligar para \"Não fazer nada\" nas configurações de energia da sua área de trabalho." \
-      "Set the power button to \"Do nothing\" in your desktop power settings."
-  fi
-}
-
-# --- enrollment and test -----------------------------------------------------------------------
+# --- enrollment ---------------------------------------------------------------------------------
 
 DEDOS=(right-index-finger right-thumb left-index-finger left-thumb)
 nome_dedo() {
@@ -600,11 +511,12 @@ cadastrar() {
   local ja dedo esc i
   ja=$(dedos_cadastrados)
   if [ -n "$ja" ]; then
-    info "Já há digitais cadastradas: $(echo $ja)" "Fingerprints already enrolled: $(echo $ja)"
+    info "Digitais já cadastradas: $(echo $ja)" "Fingerprints already enrolled: $(echo $ja)"
     perguntar "Manter essas digitais e pular o cadastro?" "Keep them and skip enrollment?" s && return 0
   fi
+  [ "$TEM_TTY" = 1 ] || { info "Cadastre depois: fprintd-enroll" "Enroll later: fprintd-enroll"; return 0; }
   dedo=${DEDOS[0]}
-  if [ "$SIM" = 0 ] && [ "$TEM_TTY" = 1 ]; then
+  if [ "$SIM" = 0 ]; then
     info "Qual dedo cadastrar?" "Which finger?"
     for i in 0 1 2 3; do printf '      %d) %s\n' $((i + 1)) "$(nome_dedo "${DEDOS[$i]}")"; done
     printf '   %s ' "$(t "Número [1]:" "Number [1]:")"
@@ -613,106 +525,46 @@ cadastrar() {
   fi
   cat <<EOF
 
-   $(t "COMO TOCAR (o leitor é o botão de ligar):" "HOW TO TOUCH (the reader is the power button):")
-     • $(t "encoste DE LEVE, sem apertar — apertar deforma a digital e pode acionar o botão" "touch LIGHTLY, do not press — pressing distorts the print and may trigger the button")
-     • $(t "levante o dedo por completo entre um toque e outro" "lift the finger completely between touches")
-     • $(t "mude um pouco a posição a cada toque (centro, pontas, laterais)" "move it a little each time (center, tip, sides)")
-     • $(t "serão 15 toques; se pedir de novo, é normal" "15 touches; being asked to retry is normal")
+   $(t "Serão 15 toques no leitor. Para ele reconhecer bem depois:" "15 touches on the reader. For good recognition later:")
+     • $(t "encoste de leve, sem apertar, e levante o dedo por completo entre os toques" "touch lightly, without pressing, and lift the finger completely between touches")
+     • $(t "varie a cada toque: centro, ponta, laterais, e o dedo um pouco girado para os dois lados" "vary each touch: center, tip, sides, and the finger slightly rotated both ways")
+     • $(t "se pedir para repetir um toque, é normal" "being asked to repeat a touch is normal")
 
 EOF
-  esperar_enter "Aperte Enter e encoste o $(nome_dedo "$dedo")..." "Press Enter and touch with your $(nome_dedo "$dedo")..."
+  esperar_enter "Aperte Enter e comece com o $(nome_dedo "$dedo")..." "Press Enter and start with your $(nome_dedo "$dedo")..."
   fprintd-delete "$USER" -f "$dedo" >/dev/null 2>&1
-  if ! fprintd-enroll -f "$dedo"; then
-    aviso "O cadastro não terminou. Rode de novo: fprintd-enroll -f $dedo" "Enrollment did not finish. Run again: fprintd-enroll -f $dedo"
-    return 1
-  fi
-  ok "Digital cadastrada" "Fingerprint enrolled"
-
-  printf '\n'
-  info "Este leitor é pequeno: cada cadastro cobre o dedo numa inclinação. Um segundo cadastro do MESMO dedo," \
-    "This reader is small: each enrollment covers one tilt. A second enrollment of the SAME finger,"
-  info "girando-o, faz ele ser aceito em mais ângulos (o sistema vai chamá-lo de \"$DEDO_ANGULOS\"; ignore o nome)." \
-    "rotating it, makes it accepted at more angles (the system will call it \"$DEDO_ANGULOS\"; ignore the name)."
-  if perguntar "Fazer o segundo cadastro (recomendado)?" "Do the second enrollment (recommended)?" s; then
-    cat <<EOF
-   $(t "Use o MESMO dedo ($(nome_dedo "$dedo")). A cada toque, gire um pouco:" "Use the SAME finger ($(nome_dedo "$dedo")). Rotate it a little on each touch:")
-     $(t "toques 1–4: reto · 5–8: inclinado à esquerda · 9–12: à direita · 13–15: de lado" "touches 1–4: straight · 5–8: tilted left · 9–12: tilted right · 13–15: sideways")
-EOF
-    esperar_enter "Aperte Enter para começar..." "Press Enter to start..."
-    fprintd-delete "$USER" -f "$DEDO_ANGULOS" >/dev/null 2>&1
-    fprintd-enroll -f "$DEDO_ANGULOS" && ok "Segundo cadastro feito" "Second enrollment done"
+  if fprintd-enroll -f "$dedo"; then
+    ok "Digital cadastrada" "Fingerprint enrolled"
+  else
+    aviso "O cadastro não terminou. Tente de novo pelas Configurações do sistema ou com: fprintd-enroll -f $dedo" \
+      "Enrollment did not finish. Try again in the system Settings or with: fprintd-enroll -f $dedo"
   fi
 }
-
-verificar_toque() { # prints match / no-match / timeout
-  local r
-  r=$(timeout 25 fprintd-verify -f any 2>&1 | grep -o 'verify-[a-z-]*' | tail -1)
-  case "$r" in verify-match) echo match ;; verify-no-match) echo no-match ;; *) echo timeout ;; esac
-}
-
-teste_rapido() {
-  titulo "Teste rápido" "Quick test"
-  [ -n "$(dedos_cadastrados)" ] || return 0
-  perguntar "Testar agora (3 toques do dedo cadastrado e 2 de outros dedos)?" "Test now (3 touches of the enrolled finger, 2 of other fingers)?" s || return 0
-  local certos=0 errados=0 i r
-  for i in 1 2 3; do
-    esperar_enter "[$i/5] Enter, depois encoste o dedo CADASTRADO" "[$i/5] Enter, then touch with the ENROLLED finger"
-    r=$(verificar_toque)
-    case $r in match) certos=$((certos + 1)); ok "aceito" "accepted" ;; *) aviso "não reconhecido ($r)" "not recognised ($r)" ;; esac
-  done
-  for i in 4 5; do
-    esperar_enter "[$i/5] Enter, depois encoste OUTRO dedo (não cadastrado)" "[$i/5] Enter, then touch with ANOTHER finger (not enrolled)"
-    r=$(verificar_toque)
-    case $r in match) errados=$((errados + 1)); aviso "aceito (não deveria!)" "accepted (it should not!)" ;; *) ok "recusado" "rejected" ;; esac
-  done
-  printf '\n'
-  info "Resultado: dedo cadastrado $certos/3 aceito, outros dedos $errados/2 aceitos." "Result: enrolled finger $certos/3 accepted, other fingers $errados/2 accepted."
-  if [ $errados -gt 0 ]; then
-    aviso "Um dedo errado foi aceito. Por favor relate em https://github.com/$REPO_GH/issues (modelo do notebook e resultado)." \
-      "A wrong finger was accepted. Please report it at https://github.com/$REPO_GH/issues (laptop model and result)."
-  elif [ $certos -lt 2 ]; then
-    info "Poucos aceites: refaça o cadastro tocando de leve e variando a posição (bash $PREFIXO/share/fprint-538d/instalar.sh)." \
-      "Few accepted: enroll again touching lightly and varying the position (bash $PREFIXO/share/fprint-538d/instalar.sh)."
-  fi
-}
-
-# ---------------------------------------------------------------------------------------------
 
 principal_instalar() {
   printf '%s\n' "${C_N}fprint-538d — $(t "leitor de digital Goodix 538d" "Goodix 538d fingerprint reader")${C_0}"
   verificar
-  local pam=s botao=n
+  local pam=s
   if [ -e "$PREFIXO/share/fprint-538d/VERSAO" ]; then
     info "Já instalado: será atualizado/reparado, mantendo as digitais." "Already installed: it will be updated/repaired, keeping the fingerprints."
   fi
   titulo "Opções" "Options"
   perguntar "Usar a digital para entrar no sistema, desbloquear a tela, sudo e janelas de senha? (a senha continua valendo)" \
     "Use the fingerprint to log in, unlock the screen, sudo and password dialogs? (the password keeps working)" s || pam=n
-  if leitor_no_botao; then
-    info "Neste modelo o leitor é o botão de ligar: tocar com força desligaria ou suspenderia o computador." \
-      "On this model the reader is the power button: a firm touch would power off or suspend the computer."
-    perguntar "Fazer o toque curto no botão não desligar (segurar 4 s continua desligando)?" "Make a short press do nothing (holding 4 s still powers off)?" s && botao=s
-  else
-    perguntar "O leitor fica no botão de ligar deste computador?" "Is the reader on this computer's power button?" n &&
-      perguntar "Fazer o toque curto no botão não desligar (segurar 4 s continua desligando)?" "Make a short press do nothing (holding 4 s still powers off)?" s && botao=s
-  fi
 
   obter_pacote
   titulo "Instalando (a senha de administrador será pedida uma vez)" "Installing (the administrator password is asked once)"
-  como_root instalar "$PACOTE_DIR" "$USER" "$pam" "$botao"
+  como_root instalar "$PACOTE_DIR" "$USER" "$pam"
   local r=$?
   [ $r -eq 3 ] && exit 0
   [ $r -eq 0 ] || exit $r
-  [ "$botao" = s ] && botao_desktop aplicar
+  rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/fprint-538d" # left by version 0.1.0
 
-  if [ "$OPT_SEM_CADASTRO" = 0 ]; then
-    cadastrar
-    teste_rapido
-  fi
+  [ "$OPT_SEM_CADASTRO" = 1 ] || cadastrar
   titulo "Pronto!" "Done!"
   info "Desinstalar:  bash $PREFIXO/share/fprint-538d/instalar.sh --desinstalar" "Uninstall:  bash $PREFIXO/share/fprint-538d/instalar.sh --uninstall"
-  info "Cadastrar outro dedo:  fprintd-enroll -f left-index-finger    ·  Testar: fprintd-verify -f any" \
-    "Enroll another finger:  fprintd-enroll -f left-index-finger    ·  Test: fprintd-verify -f any"
+  info "Mais dedos: nas Configurações do sistema (Usuários / Digital) ou  fprintd-enroll -f left-index-finger" \
+    "More fingers: in the system Settings (Users / Fingerprint) or  fprintd-enroll -f left-index-finger"
   info "Conte como foi no seu modelo: https://github.com/$REPO_GH/issues" "Tell us how it went on your model: https://github.com/$REPO_GH/issues"
   printf '\n'
 }
@@ -728,7 +580,7 @@ principal_desinstalar() {
   cp "$SELF" "$copia" && chmod 755 "$copia" && SELF=$copia # the original is deleted by the root part
   como_root desinstalar "$apagar" || { rm -f "$copia"; exit 1; }
   rm -f "$copia"
-  botao_desktop desfazer
+  rm -rf "${XDG_CONFIG_HOME:-$HOME/.config}/fprint-538d"
 }
 
 # ---------------------------------------------------------------------------------------------

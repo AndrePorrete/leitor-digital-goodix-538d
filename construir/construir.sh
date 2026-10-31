@@ -107,7 +107,7 @@ rm -rf fprintd
 git -c advice.detachedHead=false clone -q --depth 1 --branch "$FPRINTD_TAG" "$FPRINTD_URL" fprintd
 for p in "$REPO"/patches/fprintd/*.patch; do git -C fprintd apply "$p"; done
 PKG_CONFIG_PATH="$WORK/libfprint/build/meson-uninstalled:$PKG_CONFIG_PATH" \
-  meson setup fprintd/build fprintd --prefix=$PREFIX --libdir=lib --buildtype=release \
+  meson setup fprintd/build fprintd --prefix=$PREFIX --libdir=lib --sysconfdir=/etc --buildtype=release \
   -Dpam=false -Dman=false -Dsystemd=false -Dgtk_doc=false
 ninja -C fprintd/build src/fprintd
 
