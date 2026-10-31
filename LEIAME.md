@@ -12,35 +12,29 @@ notebooks Dell) funcionar no Linux: login, desbloqueio de tela, `sudo` e janelas
 
 ## Instalar
 
-Abra um terminal e cole (como seu usuário normal, **sem** sudo):
+1. Abra o **Terminal**: aperte juntas as teclas **Ctrl + Alt + T** (ou procure "Terminal" no menu).
+2. Copie a linha abaixo (botão de copiar à direita dela), cole no Terminal com **Ctrl + Shift + V**
+   e aperte **Enter**:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh && bash instalar.sh
+bash <(wget -qO- https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh || curl -fsSL https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh)
 ```
 
-O instalador:
+3. Siga a tela. O instalador explica cada passo e mostra quando está trabalhando:
+   1. confere se o computador tem o leitor `27c6:538d` (recusa qualquer outro);
+   2. faz duas perguntas — usar a digital no login (a senha continua valendo) e o nível de
+      reconhecimento (para dedos com calo, escolha **Tolerante**);
+   3. baixa o driver já compilado;
+   4. pede **a sua senha uma vez** (enquanto digita, nada aparece — é normal) e instala;
+   5. guia o cadastro do dedo: 15 toques **leves** no leitor.
 
-1. confere se o leitor `27c6:538d` está no computador (e recusa qualquer outro);
-2. baixa o driver já compilado (com conferência de integridade) — nada para compilar;
-3. pede sua senha **uma vez** e instala em `/opt/fprint-538d`, ao lado do `fprintd` da sua
-   distribuição (nenhum arquivo da distribuição é sobrescrito);
-4. confere o firmware do leitor e desfaz tudo se não for compatível;
-5. se você quiser, liga a digital no login, desbloqueio de tela, `sudo` e janelas de senha usando
-   **o ajuste padrão da própria distribuição** — **a senha continua valendo sempre**;
-6. guia o cadastro de um dedo (outros dedos depois, nas Configurações do sistema).
+Nada mais no sistema é alterado e nada é gravado no leitor. Depois de formatar, é só repetir.
 
-Nada mais no sistema é alterado. Depois de formatar: rodar o instalador, cadastrar, pronto.
+### Depois de instalado
 
-Rodar de novo atualiza ou repara a instalação, mantendo as digitais.
-
-**Desinstalar** (restaura o login e o `fprintd` original):
-
-```sh
-bash /opt/fprint-538d/share/fprint-538d/instalar.sh --desinstalar
-```
-
-Dicas: **encoste de leve** (apertar deforma a digital) e, no cadastro, varie a posição e gire um
-pouco o dedo, para ele ser reconhecido em mais ângulos.
+Abra o menu de aplicativos e procure **Leitor de digital** (ou digite `leitor-digital` num
+terminal). Lá você cadastra outros dedos, testa, muda o nível de reconhecimento, atualiza ou
+desinstala — sem digitar comandos.
 
 ## Dedos difíceis (calos, pele seca)
 
@@ -53,7 +47,7 @@ leitor reconhece mal. Nesse caso:
    depois:
 
    ```sh
-   bash /opt/fprint-538d/share/fprint-538d/instalar.sh --ajustar
+   leitor-digital      # opção 3 do menu
    ```
 
    Sem perguntas: `--nivel tolerante` (ou `padrao`, `rigoroso`), na instalação ou junto com `--ajustar`.

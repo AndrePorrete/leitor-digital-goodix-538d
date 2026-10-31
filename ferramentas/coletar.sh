@@ -7,7 +7,7 @@ OUT="$H/coleta-$(date +%H%M)"
 [ "$(id -u)" -eq 0 ] || { echo "Rode com sudo: sudo $0"; exit 1; }
 
 systemctl stop fprintd
-trap 'systemctl start fprintd; chown -R "${SUDO_USER:-porrete}": "$OUT" 2>/dev/null' EXIT
+trap 'systemctl start fprintd; chown -R "${SUDO_USER:-$USER}": "$OUT" 2>/dev/null' EXIT
 
 export GOODIX53XD_DAC_OFFSET=8
 export G_MESSAGES_DEBUG=

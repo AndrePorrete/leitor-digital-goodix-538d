@@ -12,36 +12,32 @@ Dell laptops) work on Linux: login, screen unlock, `sudo` and password dialogs.
 
 ## Install
 
-Open a terminal and paste (as your normal user, **not** with sudo):
+1. Open a **Terminal**: press **Ctrl + Alt + T** (or look for "Terminal" in the menu).
+2. Copy the line below (copy button on its right), paste it in the Terminal with
+   **Ctrl + Shift + V** and press **Enter**:
 
 ```sh
-curl -fsSLO https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh && bash instalar.sh
+bash <(wget -qO- https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh || curl -fsSL https://raw.githubusercontent.com/AndrePorrete/leitor-digital-goodix-538d/main/instalar.sh)
 ```
 
-The installer:
+3. Follow the screen. The installer explains every step and shows when it is working:
+   1. checks that the `27c6:538d` reader is present (refuses anything else);
+   2. asks two questions — fingerprint for login (your password keeps working) and the
+      recognition level (for callused fingers, choose **Tolerant**);
+   3. downloads the prebuilt driver (checksum verified);
+   4. asks for **your password once** (nothing shows while you type — normal) and installs it in
+      `/opt/fprint-538d`, next to your distribution's `fprintd` (nothing overwritten); the reader
+      firmware is checked and everything is undone if it is not compatible;
+   5. guides you through enrolling a finger: 15 **light** touches.
 
-1. checks that the `27c6:538d` reader is present (and refuses anything else);
-2. downloads a prebuilt driver bundle (checksum verified) — no compiling;
-3. asks for your password **once** and installs it in `/opt/fprint-538d`, next to your
-   distribution's `fprintd` (no distribution file is overwritten);
-4. checks the reader firmware and undoes everything if it is not compatible;
-5. optionally turns on fingerprint login (login, screen unlock, `sudo`, password dialogs) using
-   **your distribution's own standard switch** — **your password always keeps working**;
-6. guides you through enrolling one finger (more fingers later in the system Settings).
+Fingerprint login uses your distribution's own standard switch. Nothing else on the system is
+changed and nothing is written to the sensor. After reinstalling the system, just repeat.
 
-Nothing else on the system is changed. After reinstalling the system: run the installer, enroll,
-done.
+### After installing
 
-Running it again updates or repairs the installation and keeps your fingerprints.
-
-**Uninstall** (restores login settings and the original `fprintd`):
-
-```sh
-bash /opt/fprint-538d/share/fprint-538d/instalar.sh --uninstall
-```
-
-Tips: **touch lightly** (pressing distorts the print), and during enrollment vary the position and
-rotate the finger a little, so it is recognised at more angles.
+Open the applications menu and look for **Fingerprint reader** (or type `leitor-digital` in a
+terminal): enroll more fingers, test, change the recognition level, update or uninstall — no
+commands to type.
 
 ## Hard fingers (calluses, dry skin)
 
@@ -53,7 +49,7 @@ poorly. Then:
 2. **Choose the recognition level** — the installer asks during installation; to change it later:
 
    ```sh
-   bash /opt/fprint-538d/share/fprint-538d/instalar.sh --tune
+   leitor-digital      # menu option 3
    ```
 
    Without questions: `--level tolerant` (or `default`, `strict`), on install or with `--tune`.
