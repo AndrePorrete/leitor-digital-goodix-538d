@@ -1,0 +1,48 @@
+name: "Relato de uso / Usage report"
+description: "Funcionou ou não no seu notebook? / Did it work on your laptop?"
+title: "[relato] modelo / model — sistema / system"
+labels: ["relato"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Obrigado! Preencha o que souber. / Thanks! Fill in what you know.
+        **Não cole imagens de digitais. / Do not paste fingerprint images.**
+  - type: input
+    id: modelo
+    attributes:
+      label: "Modelo do notebook / Laptop model"
+      placeholder: "Dell Inspiron 5590"
+    validations:
+      required: true
+  - type: input
+    id: sistema
+    attributes:
+      label: "Sistema e versão / System and version"
+      placeholder: "Fedora 44 KDE, Ubuntu 24.04..."
+    validations:
+      required: true
+  - type: dropdown
+    id: resultado
+    attributes:
+      label: "Resultado / Result"
+      options:
+        - "Funcionou bem / Works well"
+        - "Funciona, mas falha às vezes / Works but sometimes fails"
+        - "Instalou, mas não reconhece / Installed but does not recognise"
+        - "Não instalou / Did not install"
+    validations:
+      required: true
+  - type: input
+    id: nivel
+    attributes:
+      label: "Nível de reconhecimento / Recognition level"
+      placeholder: "Padrão / Default"
+  - type: textarea
+    id: detalhes
+    attributes:
+      label: "Detalhes / Details"
+      description: |
+        O que aconteceu e, se houve erro, a mensagem do instalador. / What happened and, if there was an error, the installer message.
+        Registro útil / Useful log: `journalctl -b -u fprintd --no-pager | tail -n 50`
+      render: text

@@ -1,0 +1,94 @@
+name: Bundle
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: ubuntu:22.04
+    steps:
+      - name: Git and certificates
+        run: apt-get update -qq && apt-get install -y -qq git ca-certificates >/dev/null
+      - uses: actions/checkout@v4
+      - name: Cache OpenSSL / OpenCV
+        uses: actions/cache@v4
+        with:
+          path: /var/tmp/fprint-538d-build/deps
+          key: deps-v2-${{ hashFiles('construir/construir.sh') }}
+      - name: Build
+        run: bash construir/construir.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: fprint-538d-x86_64
+          path: dist/*
+
+  distros:
+    # The bundle must load on every supported distribution family
+    needs: build
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        image:
+          - ubuntu:22.04
+          - ubuntu:24.04
+          - ubuntu:26.04
+          - linuxmintd/mint22-amd64
+          - debian:12
+          - debian:13
+          - fedora:42
+          - fedora:43
+          - fedora:44
+          - almalinux:9
+          - almalinux:10
+          - archlinux:latest
+          - manjarolinux/base:latest
+          - cachyos/cachyos:latest
+          - opensuse/tumbleweed
+          - opensuse/leap:15.6
+          - opensuse/leap:16.0
+    container: ${{ matrix.image }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: fprint-538d-x86_64
+      - name: Runtime libraries of the distribution fprintd
+        run: |
+          if command -v apt-get; then apt-get update -qq && apt-get install -y -qq fprintd libpam-fprintd >/dev/null
+          elif command -v dnf; then dnf install -y -q fprintd fprintd-pam
+          elif command -v pacman; then pacman -Syu --noconfirm --needed fprintd >/dev/null
+          elif command -v zypper; then zypper -n -q install fprintd fprintd-pam tar gzip; fi
+      - name: Bundle runs
+        run: |
+          tar -xzf fprint-538d-x86_64.tar.gz
+          ldd fprint-538d/libexec/fprintd | grep -i 'not found' && exit 1
+          LD_BIND_NOW=1 fprint-538d/libexec/fprintd --help >/dev/null && echo "fprintd loads OK"
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build, distros]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: fprint-538d-x86_64
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cat > notas.md <<EOF
+          **Instalar / Install:** a linha de instalação está no [LEIAME (português)](https://github.com/$GITHUB_REPOSITORY/blob/main/LEIAME.md#instalar-5-minutos); the install line is in the [README (English)](https://github.com/$GITHUB_REPOSITORY#install-5-minutes).
+          Já instalado / Already installed: menu "Leitor de digital" / "Fingerprint reader" → 5.
+
+          O arquivo abaixo é baixado pelo instalador; não precisa baixá-lo à mão. / The file below is downloaded by the installer; no need to download it by hand.
+          EOF
+          gh release create "$GITHUB_REF_NAME" -R "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" \
+            --notes-file notas.md fprint-538d-x86_64.tar.gz fprint-538d-x86_64.tar.gz.sha256

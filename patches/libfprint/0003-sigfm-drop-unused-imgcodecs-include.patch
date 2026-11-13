@@ -1,0 +1,28 @@
+From e6c8b308d22d4eda0022033c408e97f441647892 Mon Sep 17 00:00:00 2001
+From: Porrete <56418580+AndrePorrete@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 22:09:49 -0300
+Subject: [PATCH] sigfm: drop unused imgcodecs include
+
+Lets the matcher build against a minimal OpenCV (core, imgproc,
+features2d, flann).
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libfprint/sigfm/sigfm.cpp | 1 -
+ 1 file changed, 1 deletion(-)
+
+diff --git a/libfprint/sigfm/sigfm.cpp b/libfprint/sigfm/sigfm.cpp
+index b74beaa..65f3acc 100644
+--- a/libfprint/sigfm/sigfm.cpp
++++ b/libfprint/sigfm/sigfm.cpp
+@@ -26,7 +26,6 @@
+ #include "opencv2/core/persistence.hpp"
+ #include "opencv2/core/types.hpp"
+ #include "opencv2/features2d.hpp"
+-#include "opencv2/imgcodecs.hpp"
+ #include <algorithm>
+ #include <cstdio>
+ #include <filesystem>
+-- 
+2.56.0
+

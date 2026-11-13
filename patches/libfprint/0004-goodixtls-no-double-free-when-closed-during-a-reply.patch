@@ -1,0 +1,75 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Porrete <56418580+AndrePorrete@users.noreply.github.com>
+Date: Fri, 13 Nov 2026 00:40:00 -0300
+Subject: [PATCH] goodixtls: no double free when the device is closed during a
+ reply
+
+goodix_receive_pack() kept the receive buffer until the reply handlers
+returned. Those handlers send the next command with
+fpi_usb_transfer_submit_sync(), and gusb runs a nested main loop on the
+default context for it, which also dispatches fprintd's D-Bus calls.
+When PAM ends a verification (VerifyStop, Release), the device can be
+closed inside that loop: goodix_dev_deinit() freed priv->data without
+clearing it, and goodix_receive_pack() freed it again on return
+("free(): double free detected in tcache 2", seen on CachyOS right
+after a pkexec authorization).
+
+Drop the buffer before handling a complete packet, clear it in
+deinit, and don't restart the read loop once it was cancelled.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libfprint/drivers/goodixtls/goodix.c | 19 +++++++++++++++----
+ 1 file changed, 15 insertions(+), 4 deletions(-)
+
+diff --git a/libfprint/drivers/goodixtls/goodix.c b/libfprint/drivers/goodixtls/goodix.c
+index e928e76..de69641 100644
+--- a/libfprint/drivers/goodixtls/goodix.c
++++ b/libfprint/drivers/goodixtls/goodix.c
+@@ -335,6 +335,13 @@ void goodix_receive_pack(FpDevice *dev, guint8 *data, guint32 length) {
+       return;
+   }
+ 
++  // The packet is complete: drop the buffer before handling it. The handlers
++  // send the next command synchronously, and gusb then runs a nested main
++  // loop that can dispatch fprintd's D-Bus calls, closing the device
++  // (goodix_dev_deinit) before they return.
++  g_clear_pointer(&priv->data, g_free);
++  priv->length = 0;
++
+   switch (flags) {
+     case GOODIX_FLAGS_MSG_PROTOCOL:
+         fp_dbg("Got protocol msg");
+@@ -359,9 +366,6 @@ void goodix_receive_pack(FpDevice *dev, guint8 *data, guint32 length) {
+       fp_warn("Unknown flags: 0x%02x", flags);
+       break;
+   }
+-
+-  g_clear_pointer(&priv->data, g_free);
+-  priv->length = 0;
+ }
+ 
+ void goodix_receive_data_cb(FpiUsbTransfer *transfer, FpDevice *dev,
+@@ -386,6 +390,12 @@ void goodix_receive_data_cb(FpiUsbTransfer *transfer, FpDevice *dev,
+ 
+   goodix_receive_pack(dev, transfer->buffer, transfer->actual_length);
+ 
++  // Closed while the reply was handled: don't restart the read loop
++  if (g_cancellable_is_cancelled(priv->transfer_cancel_tkn)) {
++    fp_dbg("transfer cancelled, aborting read loop...");
++    return;
++  }
++
+   goodix_receive_data(dev);
+ }
+ 
+@@ -1054,7 +1064,8 @@ gboolean goodix_dev_deinit(FpDevice *dev, GError **error) {
+       fpi_device_goodixtls_get_instance_private(self);
+ 
+   if (priv->timeout) g_source_destroy(priv->timeout);
+-  g_free(priv->data);
++  g_clear_pointer(&priv->data, g_free);
++  priv->length = 0;
+   g_cancellable_cancel(priv->transfer_cancel_tkn);
+   goodix_shutdown_tls(dev, error);
+ 

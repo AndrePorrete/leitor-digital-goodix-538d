@@ -1,0 +1,73 @@
+From b25ee7a4d76a75325c0fdc48b03705dead1790e9 Mon Sep 17 00:00:00 2001
+From: Porrete <56418580+AndrePorrete@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 21:28:54 -0300
+Subject: [PATCH] Goodix 538d: save learned prints, allow re-enrolling own
+ finger, libfprint 1.94.5
+
+- match_cb: save the print updated by a match (from BaptistePignier/goodix-538d).
+- enroll_identify_cb: a duplicate owned by the same user is allowed (extra
+  enrollment of the same finger at other angles); other users still blocked.
+- meson: libfprint_min_version 1.94.5.
+---
+ meson.build  |  4 +++-
+ src/device.c | 22 ++++++++++++++++++++++
+ 2 files changed, 25 insertions(+), 1 deletion(-)
+
+diff --git a/meson.build b/meson.build
+index eebea25..3007f7b 100644
+--- a/meson.build
++++ b/meson.build
+@@ -63,7 +63,9 @@ add_project_arguments(common_cflags, language: 'c')
+ 
+ host_system = host_machine.system()
+ glib_min_version = '2.64'
+-libfprint_min_version = '1.94.9'
++# 1.94.5 with FP_DEVICE_RETRY_TOO_FAST is enough: the goodix53xd SIGFM fork
++# of libfprint is based on 1.94.5
++libfprint_min_version = '1.94.5'
+ 
+ glib_version_def = 'GLIB_VERSION_@0@_@1@'.format(
+     glib_min_version.split('.')[0], glib_min_version.split('.')[1])
+diff --git a/src/device.c b/src/device.c
+index 4de4a10..48f6f1d 100644
+--- a/src/device.c
++++ b/src/device.c
+@@ -1552,6 +1552,15 @@ match_cb (FpDevice *device,
+   cancelled = g_cancellable_is_cancelled (priv->current_cancellable);
+   matched = match != NULL && cancelled == FALSE;
+ 
++  /* Drivers learning from matches add the scan to the matched print (image
++   * devices, with libfprint's sigfm_learn_max): save it, otherwise the
++   * learning is lost when the print is loaded again. */
++  if (matched &&
++      fp_device_has_feature (device, FP_DEVICE_FEATURE_UPDATE_PRINT) &&
++      !fp_device_has_feature (device, FP_DEVICE_FEATURE_STORAGE) &&
++      store.print_data_save (match) != 0)
++    g_warning ("Failed to save the print updated by the match");
++
+   report_verify_status (rdev, matched, error);
+ }
+ 
+@@ -2131,6 +2140,19 @@ enroll_identify_cb (FpDevice *dev, GAsyncResult *res, void *user_data)
+    *  3. None of the above, we can just continue.
+    */
+ 
++  if (matched_print)
++    {
++      g_autoptr(SessionData) session = session_data_get (priv);
++
++      /* Goodix 538d: permitir cadastrar o mesmo dedo do mesmo usuário em
++       * outra vaga (cobrir mais ângulos). Dedo de outro usuário continua barrado. */
++      if (session && g_strcmp0 (fp_print_get_username (matched_print), session->username) == 0)
++        {
++          g_message ("Dedo já cadastrado pelo mesmo usuário; permitindo cadastro extra");
++          g_clear_object (&matched_print);
++        }
++    }
++
+   if (matched_print)
+     {
+       g_signal_emit (rdev, signals[SIGNAL_ENROLL_STATUS], 0, "enroll-duplicate", TRUE);
+-- 
+2.56.0
+

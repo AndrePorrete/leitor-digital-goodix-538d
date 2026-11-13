@@ -1,0 +1,159 @@
+From 471672452571fc6ff1c858ad2b1322198b85ef8c Mon Sep 17 00:00:00 2001
+From: Porrete <56418580+AndrePorrete@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 21:56:24 -0300
+Subject: [PATCH] goodixtls53xd: automatic finger DAC offset
+
+Sensors differ in brightness: on the Inspiron 5590 the finger-free
+detection frame had 25% of its pixels saturated with the OTP DAC values,
+which needed GOODIX53XD_DAC_OFFSET=8. The offset is now computed from the
+two calibration frames (per pixel linear DAC response) as the smallest one
+keeping the detection frame below 3750 for 99.5% of the pixels, and kept
+while the device object lives. GOODIX53XD_DAC_OFFSET still fixes it.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ libfprint/drivers/goodixtls/goodix53xd.c | 93 +++++++++++++++++++++++-
+ 1 file changed, 91 insertions(+), 2 deletions(-)
+
+diff --git a/libfprint/drivers/goodixtls/goodix53xd.c b/libfprint/drivers/goodixtls/goodix53xd.c
+index d3de555..7d55b64 100644
+--- a/libfprint/drivers/goodixtls/goodix53xd.c
++++ b/libfprint/drivers/goodixtls/goodix53xd.c
+@@ -72,6 +72,16 @@
+ #define GOODIX53XD_FINGER_MIN_DELTA 16 // 12 bit units
+ // Above this, the finger-free noise frame had a finger on it
+ #define GOODIX53XD_MAX_BG_NOISE 64
++// Automatic finger DAC offset: sensors differ in brightness, and a detection
++// frame close to saturation gives a wrong background (Inspiron 5590: 25% of
++// the pixels saturated at offset 0). The offset is the smallest one keeping
++// the finger-free detection frame below this level, with at most this
++// fraction of pixels above it. $GOODIX53XD_DAC_OFFSET disables it.
++#define GOODIX53XD_AUTO_DAC_TARGET 3750
++#define GOODIX53XD_AUTO_DAC_PER_MILLE 5
++#define GOODIX53XD_AUTO_DAC_MAX 48
++#define GOODIX53XD_AUTO_DAC_SLOPE 73 // fallback, 12 bit units per DAC step
++#define GOODIX53XD_AUTO_DAC_ROUNDS 4 // per calibration, avoids loops
+ // A finger still landing gives a partial, blurry image: the capture waits
+ // for the delta to the background to stop changing, then rejects presses
+ // that are too light
+@@ -126,6 +136,10 @@ struct _FpiDeviceGoodixTls53XD {
+   // next frame read
+   int finger_dac_offset;
+   int dac_offset;
++  // Automatic finger DAC offset, kept while the device object lives;
++  // -1 when $GOODIX53XD_DAC_OFFSET fixes it
++  int auto_dac_offset;
++  guint auto_dac_rounds;
+ 
+   Goodix53xdCaptureMode capture_mode;
+   guint background_frames;
+@@ -803,6 +817,55 @@ static void extrapolate_background(FpiDeviceGoodixTls53XD* self)
+     }
+ }
+ 
++/**
++ * @brief Finger DAC offset keeping the finger-free detection frame unsaturated
++ * @details Every pixel drops linearly with the DAC offset; its slope comes
++ * from the detection and calibration frames (taken 20 steps apart). Returns
++ * the smallest offset where at most GOODIX53XD_AUTO_DAC_PER_MILLE of the
++ * pixels stay above GOODIX53XD_AUTO_DAC_TARGET. Pixels saturated in the
++ * detection frame make the estimate too low: then at least 4 more steps.
++ *
++ * @param self
++ */
++static int auto_dac_offset(FpiDeviceGoodixTls53XD* self)
++{
++    const int span = GOODIX53XD_CALIB_DAC_STEP - GOODIX53XD_DETECT_DAC_STEP;
++    const int current = self->finger_dac_offset;
++    guint saturated = 0;
++    int best = GOODIX53XD_AUTO_DAC_MAX;
++
++    for (int offset = 0; offset <= GOODIX53XD_AUTO_DAC_MAX; ++offset) {
++        guint above = 0;
++
++        for (int i = 0; i != GOODIX53XD_FRAME_SIZE; ++i) {
++            if (!in_image(i)) {
++                continue;
++            }
++            const int detect = self->detect_img[i];
++            const int calib = self->calib_img[i];
++            int slope = GOODIX53XD_AUTO_DAC_SLOPE * span;
++            if (detect < 0xfff && calib > 0 && detect > calib) {
++                slope = detect - calib;
++            }
++            // Value at the detection DAC of this offset, times span
++            const int value = detect * span - (offset - current) * slope;
++            above += value > GOODIX53XD_AUTO_DAC_TARGET * span;
++            if (offset == 0) {
++                saturated += detect >= 0xfff;
++            }
++        }
++        if (above * 1000 <= GOODIX53XD_IMG_SIZE * GOODIX53XD_AUTO_DAC_PER_MILLE) {
++            best = offset;
++            break;
++        }
++    }
++
++    if (saturated * 1000 > GOODIX53XD_IMG_SIZE * GOODIX53XD_AUTO_DAC_PER_MILLE) {
++        best = MAX(best, current + 4);
++    }
++    return MIN(best, GOODIX53XD_AUTO_DAC_MAX);
++}
++
+ /**
+  * @brief Whether the calibration frames were taken without finger
+  * @details Without finger, the detection frame median is ~3770 and no pixel
+@@ -881,6 +944,25 @@ static void scan_on_read_img(FpDevice* dev, guint8* data, guint16 len,
+                 return;
+             }
+ 
++            // Sensor brightness: retake the calibration frames at the
++            // automatic finger DAC offset when it moved by 2+ steps
++            if (self->auto_dac_offset >= 0 &&
++                self->auto_dac_rounds < GOODIX53XD_AUTO_DAC_ROUNDS) {
++                const int offset = auto_dac_offset(self);
++                self->auto_dac_rounds++;
++                if (ABS(offset - self->finger_dac_offset) >= 2) {
++                    g_message("Finger DAC offset %d -> %d (automatic)",
++                            self->finger_dac_offset, offset);
++                    self->auto_dac_offset = offset;
++                    self->finger_dac_offset = offset;
++                    self->background_frames = 0;
++                    self->dac_offset =
++                        self->finger_dac_offset + GOODIX53XD_DETECT_DAC_STEP;
++                    fpi_ssm_jump_to_state(ssm, SCAN_STAGE_SWITCH_TO_FDT_MODE);
++                    return;
++                }
++            }
++
+             self->background_frames++;
+             extrapolate_background(self);
+             self->dac_offset =
+@@ -1117,8 +1199,14 @@ static void scan_run_state(FpiSsm* ssm, FpDevice* dev)
+         // finger frame (FDT mode, sensor register, image)
+         set_fdt_otp(fdt_switch_state_mode_53xd, self->otp);
+         const gchar* dac_offset = g_getenv("GOODIX53XD_DAC_OFFSET");
+-        self->finger_dac_offset =
+-            dac_offset != NULL ? (int) g_ascii_strtoll(dac_offset, NULL, 10) : 0;
++        if (dac_offset != NULL && *dac_offset != '\0') {
++            self->auto_dac_offset = -1;
++            self->finger_dac_offset = (int) g_ascii_strtoll(dac_offset, NULL, 10);
++        } else {
++            self->auto_dac_offset = MAX(self->auto_dac_offset, 0);
++            self->finger_dac_offset = self->auto_dac_offset;
++        }
++        self->auto_dac_rounds = 0;
+         self->capture_mode = GOODIX53XD_CAPTURE_BACKGROUND;
+         self->background_frames = 0;
+         self->dac_offset = self->finger_dac_offset + GOODIX53XD_DETECT_DAC_STEP;
+@@ -1285,6 +1373,7 @@ static void dev_deactivate(FpImageDevice *img_dev) {
+ static void fpi_device_goodixtls53xd_init(FpiDeviceGoodixTls53XD* self)
+ {
+     self->frames = NULL;
++    self->auto_dac_offset = 0;
+ 
+     const gchar* min_contact = g_getenv("GOODIX53XD_MIN_CONTACT");
+     self->min_contact = min_contact != NULL
+-- 
+2.56.0
+

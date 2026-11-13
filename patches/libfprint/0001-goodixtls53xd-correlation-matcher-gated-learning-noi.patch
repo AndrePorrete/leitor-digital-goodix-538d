@@ -1,0 +1,344 @@
+From 24653e25aed16cd8a4a7c9ad36962b2f645ab4ac Mon Sep 17 00:00:00 2001
+From: Porrete <56418580+AndrePorrete@users.noreply.github.com>
+Date: Fri, 30 Oct 2026 21:28:54 -0300
+Subject: [PATCH] goodixtls53xd: correlation matcher, gated learning, noise
+ recalibration (Inspiron 5590)
+
+- sigfm: store the 8-bit press image in the print; when both images exist,
+  score = coherent rotation NCC (+-15 deg, theta / -theta) x 25th percentile
+  of 12x12 block correlations, x100. SIFT/SIGFM only as fallback.
+- fpi-print: best score over all template images, exposed through
+  fpi_print_sigfm_last_score().
+- fpi-image-device: learn only when best score >= FPRINT_LEARN_MIN (75).
+- fp-image-device: FPRINT_BZ3_THRESHOLD env override.
+- goodix53xd: recalibrate when the noise frame has a finger (hang fix),
+  15 enroll stages, threshold 60.
+---
+ libfprint/drivers/goodixtls/goodix53xd.c |  20 +++-
+ libfprint/fp-image-device.c              |   5 +
+ libfprint/fpi-image-device.c             |  12 +++
+ libfprint/fpi-print.c                    |  19 +++-
+ libfprint/fpi-print.h                    |   2 +
+ libfprint/sigfm/img-info.hpp             |   2 +
+ libfprint/sigfm/sigfm.cpp                | 122 ++++++++++++++++++++++-
+ 7 files changed, 174 insertions(+), 8 deletions(-)
+
+diff --git a/libfprint/drivers/goodixtls/goodix53xd.c b/libfprint/drivers/goodixtls/goodix53xd.c
+index 689ead2..d3de555 100644
+--- a/libfprint/drivers/goodixtls/goodix53xd.c
++++ b/libfprint/drivers/goodixtls/goodix53xd.c
+@@ -70,6 +70,8 @@
+ #define GOODIX53XD_POLL_DELAY 100 // ms between two polled frames
+ #define GOODIX53XD_FINGER_NOISE_FACTOR 4
+ #define GOODIX53XD_FINGER_MIN_DELTA 16 // 12 bit units
++// Above this, the finger-free noise frame had a finger on it
++#define GOODIX53XD_MAX_BG_NOISE 64
+ // A finger still landing gives a partial, blurry image: the capture waits
+ // for the delta to the background to stop changing, then rejects presses
+ // that are too light
+@@ -77,7 +79,7 @@
+ #define GOODIX53XD_SETTLE_MAX_POLLS 8
+ #define GOODIX53XD_MIN_CONTACT_DELTA 1900 // $GOODIX53XD_MIN_CONTACT overrides
+ // Each image only covers a small part of the finger
+-#define GOODIX53XD_ENROLL_STAGES 20
++#define GOODIX53XD_ENROLL_STAGES 15
+ #define GOODIX53XD_TEMPLATE_MAX 50
+ // Verify scans with fewer SIFT keypoints, or a stronger signal, are asked
+ // again: offline they caught half of the failed matches and almost no
+@@ -889,6 +891,18 @@ static void scan_on_read_img(FpDevice* dev, guint8* data, guint16 len,
+ 
+         decode_frame(frame, data);
+         delta = frame_delta(frame, self->detect_img);
++        // A finger landing right after the calibration frames makes the
++        // "noise" frame a finger frame: the threshold would then be
++        // unreachable and the scan would hang. Calibrate again instead.
++        if (delta > GOODIX53XD_MAX_BG_NOISE) {
++            fp_dbg("Background noise %u too high (finger landing?), recalibrating",
++                   delta);
++            self->background_frames = 0;
++            self->dac_offset =
++                self->finger_dac_offset + GOODIX53XD_DETECT_DAC_STEP;
++            fpi_ssm_jump_to_state(ssm, SCAN_STAGE_WAIT);
++            return;
++        }
+         self->finger_threshold = MAX(delta * GOODIX53XD_FINGER_NOISE_FACTOR,
+                                      delta + GOODIX53XD_FINGER_MIN_DELTA);
+         fp_dbg("Background noise: %u, finger threshold: %u", delta,
+@@ -1311,11 +1325,11 @@ static void fpi_device_goodixtls53xd_class_init(
+   img_dev_class->algorithm = FPI_DEVICE_ALGO_SIGFM;
+   // Like the Goodix Windows engine: the template keeps up to 50 images,
+   // matching scans being added to it
+-  img_dev_class->sigfm_learn_max = GOODIX53XD_TEMPLATE_MAX;
++  img_dev_class->sigfm_learn_max = GOODIX53XD_TEMPLATE_MAX; // com trava FPRINT_LEARN_MIN (fpi-image-device.c)
+   img_dev_class->sigfm_min_keypoints = GOODIX53XD_MIN_KEYPOINTS;
+   // SIGFM score threshold. Offline, impostors never scored above 3 once the
+   // fixed pattern of the sensor is removed by the calibration
+-  img_dev_class->bz3_threshold = 10;
++  img_dev_class->bz3_threshold = 60; // correlação coerente x blocos x100 (dedo errado máx. 51 nos testes)
+   img_dev_class->img_width = GOODIX53XD_IMG_WIDTH;
+   img_dev_class->img_height = GOODIX53XD_IMG_HEIGHT;
+ 
+diff --git a/libfprint/fp-image-device.c b/libfprint/fp-image-device.c
+index 845d769..0ee6611 100644
+--- a/libfprint/fp-image-device.c
++++ b/libfprint/fp-image-device.c
+@@ -191,6 +191,11 @@ fp_image_device_constructed (GObject * obj)
+   priv->bz3_threshold = BOZORTH3_DEFAULT_THRESHOLD;
+   if (cls->bz3_threshold > 0)
+     priv->bz3_threshold = cls->bz3_threshold;
++  {
++    const gchar *env = g_getenv ("FPRINT_BZ3_THRESHOLD");
++    if (env && g_ascii_strtoll (env, NULL, 10) > 0)
++      priv->bz3_threshold = (gint) g_ascii_strtoll (env, NULL, 10);
++  }
+   priv->algorithm = FPI_PRINT_NBIS;
+   if (cls->algorithm > 0)
+     priv->algorithm = cls->algorithm;
+diff --git a/libfprint/fpi-image-device.c b/libfprint/fpi-image-device.c
+index 04cda3e..37b68ac 100644
+--- a/libfprint/fpi-image-device.c
++++ b/libfprint/fpi-image-device.c
+@@ -245,6 +245,18 @@ fp_image_device_maybe_learn (FpImageDevice *self, FpPrint *template, FpPrint *pr
+   if (priv->algorithm != FPI_PRINT_SIGFM || cls->sigfm_learn_max == 0)
+     return;
+ 
++  /* Trava: só aprende toques com nota bem acima do limiar, para nunca
++   * incorporar um dedo errado aceito por pouco ($FPRINT_LEARN_MIN, padrão 75) */
++  {
++    const gchar *env = g_getenv ("FPRINT_LEARN_MIN");
++    gint learn_min = env ? (gint) g_ascii_strtoll (env, NULL, 10) : 75;
++    if (fpi_print_sigfm_last_score () < learn_min)
++      {
++        fp_dbg ("Not learning: score %d < %d", fpi_print_sigfm_last_score (), learn_min);
++        return;
++      }
++  }
++
+   fpi_print_sigfm_learn (template, print,
+                          fp_device_get_nr_enroll_stages (FP_DEVICE (self)),
+                          cls->sigfm_learn_max);
+diff --git a/libfprint/fpi-print.c b/libfprint/fpi-print.c
+index a037c8b..cd436b7 100644
+--- a/libfprint/fpi-print.c
++++ b/libfprint/fpi-print.c
+@@ -313,6 +313,15 @@ fpi_print_bz3_match (FpPrint *template, FpPrint *print, gint bz3_threshold, GErr
+  *
+  * Returns: Whether the prints match, @error will be set if #FPI_MATCH_ERROR is returned
+  */
++static gint sigfm_last_score = 0;
++
++/* Maior nota da última comparação SIGFM */
++gint
++fpi_print_sigfm_last_score (void)
++{
++  return sigfm_last_score;
++}
++
+ FpiMatchResult
+ fpi_print_sigfm_match (FpPrint * template, FpPrint * print,
+                      gint bz3_threshold, GError ** error)
+@@ -326,6 +335,9 @@ fpi_print_sigfm_match (FpPrint * template, FpPrint * print,
+       return FPI_MATCH_ERROR;
+     }
+   SigfmImgInfo * against = g_ptr_array_index (print->prints, 0);
++  gint best = 0;
++  /* Compara com todas as imagens: a maior nota decide e também libera
++   * (ou não) o aprendizado, ver fpi_print_sigfm_last_score() */
+   for (int i = 0; i != template->prints->len; ++i)
+     {
+       SigfmImgInfo * pinfo = g_ptr_array_index (template->prints, i);
+@@ -337,10 +349,11 @@ fpi_print_sigfm_match (FpPrint * template, FpPrint * print,
+           return FPI_MATCH_ERROR;
+         }
+       fp_dbg ("sigfm score %d/%d", score, bz3_threshold);
+-      if (score >= bz3_threshold)
+-        return FPI_MATCH_SUCCESS;
++      best = MAX (best, score);
+     }
+-  return FPI_MATCH_FAIL;
++  sigfm_last_score = best;
++  fp_dbg ("sigfm best score %d/%d", best, bz3_threshold);
++  return best >= bz3_threshold ? FPI_MATCH_SUCCESS : FPI_MATCH_FAIL;
+ }
+ 
+ /**
+diff --git a/libfprint/fpi-print.h b/libfprint/fpi-print.h
+index 1a4aaa1..b44c655 100644
+--- a/libfprint/fpi-print.h
++++ b/libfprint/fpi-print.h
+@@ -54,6 +54,8 @@ FpiMatchResult fpi_print_bz3_match (FpPrint *temp,
+                                     gint     bz3_threshold,
+                                     GError **error);
+ 
++gint fpi_print_sigfm_last_score (void);
++
+ FpiMatchResult fpi_print_sigfm_match (FpPrint * template, FpPrint * print,
+                                     gint bz3_threshold, GError * *error);
+ 
+diff --git a/libfprint/sigfm/img-info.hpp b/libfprint/sigfm/img-info.hpp
+index bf270ec..6afe3a5 100644
+--- a/libfprint/sigfm/img-info.hpp
++++ b/libfprint/sigfm/img-info.hpp
+@@ -7,4 +7,6 @@
+ struct SigfmImgInfo {
+     std::vector<cv::KeyPoint> keypoints;
+     cv::Mat descriptors;
++    // Imagem 8 bits do toque, para o comparador por correlação alinhada
++    cv::Mat image;
+ };
+\ No newline at end of file
+diff --git a/libfprint/sigfm/sigfm.cpp b/libfprint/sigfm/sigfm.cpp
+index 40b17e8..b74beaa 100644
+--- a/libfprint/sigfm/sigfm.cpp
++++ b/libfprint/sigfm/sigfm.cpp
+@@ -45,7 +45,7 @@ template<>
+ struct serializer<SigfmImgInfo> : public std::true_type {
+     static void serialize(const SigfmImgInfo& info, stream& out)
+     {
+-        out << info.keypoints << info.descriptors;
++        out << info.keypoints << info.descriptors << info.image;
+     }
+ };
+ 
+@@ -55,6 +55,13 @@ struct deserializer<SigfmImgInfo> : public std::true_type {
+     {
+         SigfmImgInfo info;
+         in >> info.keypoints >> info.descriptors;
++        // Digitais antigas não têm a imagem
++        try {
++            in >> info.image;
++        }
++        catch (...) {
++            info.image = cv::Mat{};
++        }
+         return info;
+     }
+ };
+@@ -130,12 +137,123 @@ SigfmImgInfo* sigfm_extract(const SigfmPix* pix, int width, int height)
+     cv::Mat descs;
+     cv::SIFT::create()->detectAndCompute(img, roi, pts, descs);
+ 
+-    auto* info = new SigfmImgInfo{pts, descs};
++    auto* info = new SigfmImgInfo{pts, descs, img.clone()};
+     return info;
+ }
+ 
++// Comparador por correlação alinhada (sensores pequenos, cristas quase paralelas):
++// o SIGFM aceita dedos diferentes porque listras paralelas têm geometria parecida.
++// Aqui a região central de uma imagem é girada (-30..30 graus) e procurada na
++// outra; a nota é a maior correlação normalizada x100 (0..100), simétrica.
++namespace {
++cv::Mat ncc_prep(const cv::Mat& u8)
++{
++    cv::Mat f, a, b;
++    u8.convertTo(f, CV_32F);
++    cv::medianBlur(f, f, 3);
++    cv::GaussianBlur(f, a, cv::Size(0, 0), 1.0);
++    cv::GaussianBlur(f, b, cv::Size(0, 0), 4.0);
++    f = a - b;
++    cv::Scalar mean, sd;
++    cv::meanStdDev(f, mean, sd);
++    f = (f - mean[0]) / (sd[0] + 1e-9);
++    return f;
++}
++
++struct ncc_hit {
++    double score;
++    int dx, dy;
++};
++
++// Região central de a girada de ang graus, procurada em b
++ncc_hit ncc_dir(const cv::Mat& a, const cv::Mat& b, int ang)
++{
++    const int H = a.rows, W = a.cols;
++    const int ch = H * 6 / 10, cw = W * 6 / 10;
++    const int y0 = (H - ch) / 2, x0 = (W - cw) / 2;
++    cv::Mat pad, ar, res;
++    cv::copyMakeBorder(b, pad, ch / 2, ch / 2, cw / 2, cw / 2,
++                       cv::BORDER_CONSTANT, cv::Scalar(0));
++    cv::Mat R = cv::getRotationMatrix2D(cv::Point2f(W / 2.0f, H / 2.0f), ang, 1.0);
++    cv::warpAffine(a, ar, R, a.size());
++    cv::matchTemplate(pad, ar(cv::Rect(x0, y0, cw, ch)), res, cv::TM_CCOEFF_NORMED);
++    double mx;
++    cv::Point loc;
++    cv::minMaxLoc(res, nullptr, &mx, nullptr, &loc);
++    return {mx, loc.x - cw / 2 - x0, loc.y - ch / 2 - y0};
++}
++
++// Concordância local depois de alinhar: 1º quartil da correlação em blocos 12x12
++double block_q25(const cv::Mat& a, const cv::Mat& b, int ang, int dx, int dy)
++{
++    const int H = a.rows, W = a.cols, bs = 12;
++    cv::Mat R = cv::getRotationMatrix2D(cv::Point2f(W / 2.0f, H / 2.0f), ang, 1.0);
++    R.at<double>(0, 2) += dx;
++    R.at<double>(1, 2) += dy;
++    cv::Mat aw, mask;
++    cv::warpAffine(a, aw, R, a.size());
++    cv::warpAffine(cv::Mat::ones(a.size(), CV_32F), mask, R, a.size());
++    std::vector<double> v;
++    for (int y = 0; y + bs <= H; y += bs / 2) {
++        for (int x = 0; x + bs <= W; x += bs / 2) {
++            const cv::Rect r(x, y, bs, bs);
++            cv::Mat m = mask(r) > 0.99f;
++            if (cv::countNonZero(m) < 0.95 * bs * bs) {
++                continue;
++            }
++            cv::Mat u = aw(r) - cv::mean(aw(r))[0];
++            cv::Mat w = b(r) - cv::mean(b(r))[0];
++            const double den = cv::norm(u) * cv::norm(w) + 1e-9;
++            v.push_back(u.dot(w) / den);
++        }
++    }
++    if (v.size() < 6) {
++        return 0;
++    }
++    std::sort(v.begin(), v.end());
++    const double pos = 0.25 * (v.size() - 1);
++    const size_t i = (size_t) pos;
++    const double f = pos - i;
++    return i + 1 < v.size() ? v[i] * (1 - f) + v[i + 1] * f : v[i];
++}
++} // namespace
++
++// Nota = melhor correlação coerente (giro de até 15 graus, o mesmo nos dois
++// sentidos) x concordância local em blocos. Dedos diferentes com sulcos
++// parecidos alinham no conjunto mas falham nos blocos.
++static int ncc_match_score(const cv::Mat& x, const cv::Mat& y)
++{
++    if (x.size() != y.size()) {
++        return 0;
++    }
++    const cv::Mat a = ncc_prep(x), b = ncc_prep(y);
++    double best = -1;
++    ncc_hit best_hit{0, 0, 0};
++    int best_ang = 0;
++    for (int ang = -15; ang <= 15; ang += 3) {
++        const ncc_hit f = ncc_dir(a, b, ang);
++        const ncc_hit r = ncc_dir(b, a, -ang);
++        const double s = (f.score + r.score) / 2;
++        if (s > best) {
++            best = s;
++            best_hit = f;
++            best_ang = ang;
++        }
++    }
++    const double q25 = block_q25(a, b, best_ang, best_hit.dx, best_hit.dy);
++    return std::max(0, (int) std::lround(best * std::max(q25, 0.0) * 100));
++}
++
+ int sigfm_match_score(SigfmImgInfo* frame, SigfmImgInfo* enrolled)
+ {
++    if (!frame->image.empty() && !enrolled->image.empty()) {
++        try {
++            return ncc_match_score(frame->image, enrolled->image);
++        }
++        catch (...) {
++            return -1;
++        }
++    }
+     try {
+         std::vector<std::vector<cv::DMatch>> points;
+         auto bfm = cv::BFMatcher::create();
+-- 
+2.56.0
+
