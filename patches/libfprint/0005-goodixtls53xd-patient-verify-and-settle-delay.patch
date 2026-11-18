@@ -1,0 +1,418 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: Porrete <56418580+AndrePorrete@users.noreply.github.com>
+Date: Sat, 14 Nov 2026 17:53:58 -0300
+Subject: [PATCH] goodixtls53xd: patient verify and settle delay
+
+Give time to place the finger: the capture waits at least
+GOODIX53XD_SETTLE_MS (default 500 ms) after the touch, and still for the
+image to stop changing.
+
+Patient verify: when a verify/identify scan fails (no match, light
+contact, too strong signal, too few keypoints) with the finger still on
+the sensor, scan again as soon as it settles instead of asking to lift
+it. The failure is reported after FPRINT_PATIENT_TRIES extra scans
+(default 3, 0 = previous behaviour) or FPRINT_PATIENT_SECONDS (default 8),
+or when the finger is lifted.
+---
+ libfprint/drivers/goodixtls/goodix53xd.c |  76 ++++++++++--
+ libfprint/fp-image-device-private.h      |   6 +
+ libfprint/fpi-image-device.c             | 148 +++++++++++++++++++++++
+ libfprint/fpi-image-device.h             |   7 ++
+ 4 files changed, 230 insertions(+), 7 deletions(-)
+
+diff --git a/libfprint/drivers/goodixtls/goodix53xd.c b/libfprint/drivers/goodixtls/goodix53xd.c
+index 7d55b64..3d22f85 100644
+--- a/libfprint/drivers/goodixtls/goodix53xd.c
++++ b/libfprint/drivers/goodixtls/goodix53xd.c
+@@ -87,6 +87,12 @@
+ // that are too light
+ #define GOODIX53XD_SETTLE_PERCENT 5 // max delta change between two polls
+ #define GOODIX53XD_SETTLE_MAX_POLLS 8
++// Minimum time between the finger touching the sensor and the capture, to
++// give time to place it ($GOODIX53XD_SETTLE_MS overrides, 0 to 3000)
++#define GOODIX53XD_SETTLE_MIN_MS 500
++// Patient verify: after a failed scan with the finger still on the sensor,
++// pause before waiting for it to settle again (see fpi-image-device.c)
++#define GOODIX53XD_REPOSITION_POLLS 3
+ #define GOODIX53XD_MIN_CONTACT_DELTA 1900 // $GOODIX53XD_MIN_CONTACT overrides
+ // Each image only covers a small part of the finger
+ #define GOODIX53XD_ENROLL_STAGES 15
+@@ -117,6 +123,7 @@ typedef enum {
+     GOODIX53XD_CAPTURE_SETTLE,
+     GOODIX53XD_CAPTURE_PRESS,
+     GOODIX53XD_CAPTURE_WAIT_FINGER_OFF,
++    GOODIX53XD_CAPTURE_REPOSITION,
+ } Goodix53xdCaptureMode;
+ 
+ struct _FpiDeviceGoodixTls53XD {
+@@ -149,6 +156,8 @@ struct _FpiDeviceGoodixTls53XD {
+   guint last_amplitude;
+   guint last_delta;
+   guint settle_polls;
++  guint settle_min_polls;
++  guint reposition_polls;
+ 
+   // Debug dumps, see dump_path()
+   gchar* dump_session;
+@@ -1015,7 +1024,9 @@ static void scan_on_read_img(FpDevice* dev, guint8* data, guint16 len,
+ 
+         if (delta <= self->finger_threshold) {
+             fp_dbg("Finger lifted before settling, delta: %u", delta);
+-            fpi_image_device_retry_scan(img_dev, FP_DEVICE_RETRY_TOO_SHORT);
++            fpi_image_device_report_finger_status(img_dev, FALSE);
++            if (!fpi_image_device_patient_lifted(img_dev))
++                fpi_image_device_retry_scan(img_dev, FP_DEVICE_RETRY_TOO_SHORT);
+             self->capture_mode = GOODIX53XD_CAPTURE_WAIT_FINGER_OFF;
+             fpi_ssm_jump_to_state(ssm, SCAN_STAGE_WAIT);
+             return;
+@@ -1027,7 +1038,8 @@ static void scan_on_read_img(FpDevice* dev, guint8* data, guint16 len,
+         self->last_delta = delta;
+         self->settle_polls++;
+ 
+-        if (!stable && self->settle_polls < GOODIX53XD_SETTLE_MAX_POLLS) {
++        if ((!stable || self->settle_polls < self->settle_min_polls) &&
++            self->settle_polls < self->settle_min_polls + GOODIX53XD_SETTLE_MAX_POLLS) {
+             fpi_ssm_jump_to_state(ssm, SCAN_STAGE_WAIT);
+             return;
+         }
+@@ -1038,8 +1050,10 @@ static void scan_on_read_img(FpDevice* dev, guint8* data, guint16 len,
+         if (delta < self->min_contact) {
+             fp_dbg("Contact too light, delta %u < %u", delta,
+                    self->min_contact);
+-            fpi_image_device_retry_scan(img_dev, FP_DEVICE_RETRY_CENTER_FINGER);
+-            self->capture_mode = GOODIX53XD_CAPTURE_WAIT_FINGER_OFF;
++            if (!fpi_image_device_patient_retry(img_dev, FP_DEVICE_RETRY_CENTER_FINGER)) {
++                fpi_image_device_retry_scan(img_dev, FP_DEVICE_RETRY_CENTER_FINGER);
++                self->capture_mode = GOODIX53XD_CAPTURE_WAIT_FINGER_OFF;
++            }
+             fpi_ssm_jump_to_state(ssm, SCAN_STAGE_WAIT);
+             return;
+         }
+@@ -1082,14 +1096,19 @@ static void scan_on_read_img(FpDevice* dev, guint8* data, guint16 len,
+             fp_dbg("Signal amplitude %u > %u, asking for another scan",
+                    self->last_amplitude, self->max_amplitude);
+             g_object_unref(img);
+-            fpi_image_device_retry_scan(img_dev, FP_DEVICE_RETRY_REMOVE_FINGER);
++            self->capture_mode = GOODIX53XD_CAPTURE_WAIT_FINGER_OFF;
++            self->dac_offset = self->finger_dac_offset + GOODIX53XD_DETECT_DAC_STEP;
++            // Patient verify: rescan sets the capture mode
++            if (!fpi_image_device_patient_retry(img_dev, FP_DEVICE_RETRY_REMOVE_FINGER))
++                fpi_image_device_retry_scan(img_dev, FP_DEVICE_RETRY_REMOVE_FINGER);
+         }
+         else {
++            // Set before reporting: a failed match may rescan right away
++            self->capture_mode = GOODIX53XD_CAPTURE_WAIT_FINGER_OFF;
++            self->dac_offset = self->finger_dac_offset + GOODIX53XD_DETECT_DAC_STEP;
+             fpi_image_device_image_captured(img_dev, img);
+         }
+ 
+-        self->capture_mode = GOODIX53XD_CAPTURE_WAIT_FINGER_OFF;
+-        self->dac_offset = self->finger_dac_offset + GOODIX53XD_DETECT_DAC_STEP;
+         fpi_ssm_jump_to_state(ssm, SCAN_STAGE_WAIT);
+         return;
+ 
+@@ -1107,9 +1126,46 @@ static void scan_on_read_img(FpDevice* dev, guint8* data, guint16 len,
+ 
+         fpi_ssm_jump_to_state(ssm, SCAN_STAGE_WAIT);
+         return;
++
++    case GOODIX53XD_CAPTURE_REPOSITION:
++        // A scan failed with the finger still on: pause, then wait for it
++        // to settle again, without asking to lift it
++        decode_frame(frame, data);
++        delta = frame_delta(frame, self->detect_img);
++
++        if (delta <= self->finger_threshold) {
++            fp_dbg("Finger lifted after a failed scan, delta: %u", delta);
++            fpi_image_device_report_finger_status(img_dev, FALSE);
++            if (!fpi_image_device_patient_lifted(img_dev))
++                fpi_image_device_retry_scan(img_dev, FP_DEVICE_RETRY_TOO_SHORT);
++            self->capture_mode = GOODIX53XD_CAPTURE_WAIT_FINGER_OFF;
++            fpi_ssm_jump_to_state(ssm, SCAN_STAGE_WAIT);
++            return;
++        }
++
++        if (++self->reposition_polls >= GOODIX53XD_REPOSITION_POLLS) {
++            fp_dbg("Scanning again, delta: %u", delta);
++            self->last_delta = delta;
++            self->settle_polls = 0;
++            self->capture_mode = GOODIX53XD_CAPTURE_SETTLE;
++        }
++        fpi_ssm_jump_to_state(ssm, SCAN_STAGE_WAIT);
++        return;
+     }
+ }
+ 
++// Patient verify (fpi-image-device.c): capture again with the finger on
++static void dev_patient_rescan(FpImageDevice* img_dev)
++{
++    FpiDeviceGoodixTls53XD* self = FPI_DEVICE_GOODIXTLS53XD(img_dev);
++
++    g_slist_free_full(self->frames, g_free);
++    self->frames = NULL;
++    self->reposition_polls = 0;
++    self->capture_mode = GOODIX53XD_CAPTURE_REPOSITION;
++    self->dac_offset = self->finger_dac_offset + GOODIX53XD_DETECT_DAC_STEP;
++}
++
+ enum scan_empty_img_state {
+     SCAN_EMPTY_NAV0,
+     SCAN_EMPTY_GET_IMG,
+@@ -1385,6 +1441,11 @@ static void fpi_device_goodixtls53xd_init(FpiDeviceGoodixTls53XD* self)
+                               ? (guint) g_ascii_strtoull(max_amplitude, NULL, 10)
+                               : GOODIX53XD_MAX_AMPLITUDE;
+ 
++    const gchar* settle_ms = g_getenv("GOODIX53XD_SETTLE_MS");
++    guint64 ms = GOODIX53XD_SETTLE_MIN_MS;
++    if (settle_ms != NULL && *settle_ms != '\0')
++        ms = MIN(g_ascii_strtoull(settle_ms, NULL, 10), 3000);
++    self->settle_min_polls = (guint) (ms / GOODIX53XD_POLL_DELAY);
+ }
+ 
+ static void fpi_device_goodixtls53xd_class_init(
+@@ -1416,6 +1477,7 @@ static void fpi_device_goodixtls53xd_class_init(
+   // matching scans being added to it
+   img_dev_class->sigfm_learn_max = GOODIX53XD_TEMPLATE_MAX; // com trava FPRINT_LEARN_MIN (fpi-image-device.c)
+   img_dev_class->sigfm_min_keypoints = GOODIX53XD_MIN_KEYPOINTS;
++  img_dev_class->patient_rescan = dev_patient_rescan;
+   // SIGFM score threshold. Offline, impostors never scored above 3 once the
+   // fixed pattern of the sensor is removed by the calibration
+   img_dev_class->bz3_threshold = 60; // correlação coerente x blocos x100 (dedo errado máx. 51 nos testes)
+diff --git a/libfprint/fp-image-device-private.h b/libfprint/fp-image-device-private.h
+index a9a9342..56bd345 100644
+--- a/libfprint/fp-image-device-private.h
++++ b/libfprint/fp-image-device-private.h
+@@ -38,6 +38,12 @@ typedef struct
+ 
+   gint                bz3_threshold;
+   FpiPrintType        algorithm;
++
++  /* Patient verify: failed attempts taken again while the finger stays */
++  guint               patient_attempts;
++  gint64              patient_deadline;
++  gboolean            patient_last_retry;
++  FpDeviceRetry       patient_last_retry_code;
+ } FpImageDevicePrivate;
+ 
+ 
+diff --git a/libfprint/fpi-image-device.c b/libfprint/fpi-image-device.c
+index 37b68ac..a014b1e 100644
+--- a/libfprint/fpi-image-device.c
++++ b/libfprint/fpi-image-device.c
+@@ -55,6 +55,9 @@ fpi_image_device_activate (FpImageDevice *self)
+ 
+   g_assert (!priv->active);
+ 
++  priv->patient_attempts = 0;
++  priv->patient_deadline = 0;
++
+   fp_dbg ("Activating image device");
+   fp_image_device_change_state (self, FPI_IMAGE_DEVICE_STATE_ACTIVATING);
+   cls->activate (self);
+@@ -116,6 +119,7 @@ fp_image_device_change_state (FpImageDevice *self, FpiImageDeviceState state)
+     { FPI_IMAGE_DEVICE_STATE_CAPTURE, FPI_IMAGE_DEVICE_STATE_DEACTIVATING }, /* cancellation */
+ 
+     { FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_OFF, FPI_IMAGE_DEVICE_STATE_IDLE },
++    { FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_OFF, FPI_IMAGE_DEVICE_STATE_CAPTURE }, /* patient verify */
+     { FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_OFF, FPI_IMAGE_DEVICE_STATE_DEACTIVATING }, /* cancellation */
+ 
+     { FPI_IMAGE_DEVICE_STATE_DEACTIVATING, FPI_IMAGE_DEVICE_STATE_INACTIVE },
+@@ -263,6 +267,81 @@ fp_image_device_maybe_learn (FpImageDevice *self, FpPrint *template, FpPrint *pr
+   fp_dbg ("Learned the matching image");
+ }
+ 
++/* Patient verify: when a verify or identify scan fails (no match, or a
++ * condition that would ask to lift the finger) while the finger is still on
++ * the sensor, drivers implementing patient_rescan capture again as soon as
++ * the finger settles, instead of reporting the failure. The failure is only
++ * reported after $FPRINT_PATIENT_TRIES extra scans (default 3, 0 disables)
++ * or $FPRINT_PATIENT_SECONDS (default 8) since the first failure. */
++#define FP_IMAGE_DEVICE_PATIENT_TRIES 3
++#define FP_IMAGE_DEVICE_PATIENT_SECONDS 8
++
++static guint
++fp_image_device_env_uint (const gchar *name, guint fallback, guint max)
++{
++  const gchar *env = g_getenv (name);
++  gchar *end = NULL;
++  guint64 v;
++
++  if (env == NULL || *env == '\0')
++    return fallback;
++  v = g_ascii_strtoull (env, &end, 10);
++  if (end == env)
++    return fallback;
++  return (guint) MIN (v, max);
++}
++
++static gboolean
++fp_image_device_patient_rescan (FpImageDevice *self, gboolean is_retry,
++                                FpDeviceRetry retry)
++{
++  FpImageDevicePrivate *priv = fp_image_device_get_instance_private (self);
++  FpImageDeviceClass *cls = FP_IMAGE_DEVICE_GET_CLASS (self);
++  FpiDeviceAction action = fpi_device_get_current_action (FP_DEVICE (self));
++  guint tries;
++  gint64 now;
++
++  if (cls->patient_rescan == NULL)
++    return FALSE;
++  if (action != FPI_DEVICE_ACTION_VERIFY && action != FPI_DEVICE_ACTION_IDENTIFY)
++    return FALSE;
++  if (!priv->active || !priv->finger_present)
++    return FALSE;
++  if (priv->state != FPI_IMAGE_DEVICE_STATE_CAPTURE &&
++      priv->state != FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_OFF)
++    return FALSE;
++  if (g_cancellable_is_cancelled (fpi_device_get_cancellable (FP_DEVICE (self))))
++    return FALSE;
++
++  tries = fp_image_device_env_uint ("FPRINT_PATIENT_TRIES",
++                                    FP_IMAGE_DEVICE_PATIENT_TRIES, 20);
++  now = g_get_monotonic_time ();
++  if (priv->patient_attempts == 0)
++    priv->patient_deadline = now +
++      (gint64) fp_image_device_env_uint ("FPRINT_PATIENT_SECONDS",
++                                         FP_IMAGE_DEVICE_PATIENT_SECONDS, 60) *
++      G_USEC_PER_SEC;
++
++  if (priv->patient_attempts >= tries || now >= priv->patient_deadline)
++    {
++      if (tries > 0)
++        g_message ("Patient verify: giving up after %u extra scans",
++                   priv->patient_attempts);
++      return FALSE;
++    }
++
++  priv->patient_attempts++;
++  priv->patient_last_retry = is_retry;
++  priv->patient_last_retry_code = retry;
++  g_message ("Patient verify: scan failed (%s), scanning again while the finger stays (%u/%u)",
++             is_retry ? "retry" : "no match", priv->patient_attempts, tries);
++
++  if (priv->state == FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_OFF)
++    fp_image_device_change_state (self, FPI_IMAGE_DEVICE_STATE_CAPTURE);
++  cls->patient_rescan (self);
++  return TRUE;
++}
++
+ static void
+ fpi_image_device_minutiae_detected (GObject *source_object, GAsyncResult *res, gpointer user_data)
+ {
+@@ -387,6 +466,15 @@ fpi_image_device_minutiae_detected (GObject *source_object, GAsyncResult *res, g
+           result = FPI_MATCH_ERROR;
+         }
+ 
++      if (result != FPI_MATCH_SUCCESS &&
++          (!error || error->domain == FP_DEVICE_RETRY) &&
++          fp_image_device_patient_rescan (self, error != NULL,
++                                          error ? error->code : FP_DEVICE_RETRY_GENERAL))
++        {
++          g_clear_error (&error);
++          return;
++        }
++
+       if (!error || error->domain == FP_DEVICE_RETRY)
+         fpi_device_verify_report (device, result, g_steal_pointer (&print), g_steal_pointer (&error));
+ 
+@@ -419,6 +507,15 @@ fpi_image_device_minutiae_detected (GObject *source_object, GAsyncResult *res, g
+             }
+         }
+ 
++      if (result == NULL &&
++          (!error || error->domain == FP_DEVICE_RETRY) &&
++          fp_image_device_patient_rescan (self, error != NULL,
++                                          error ? error->code : FP_DEVICE_RETRY_GENERAL))
++        {
++          g_clear_error (&error);
++          return;
++        }
++
+       if (!error || error->domain == FP_DEVICE_RETRY)
+         fpi_device_identify_report (device, result, g_steal_pointer (&print), g_steal_pointer (&error));
+ 
+@@ -582,6 +679,57 @@ fpi_image_device_image_captured (FpImageDevice *self, FpImage *image)
+   fp_image_device_change_state (self, FPI_IMAGE_DEVICE_STATE_AWAIT_FINGER_OFF);
+ }
+ 
++/**
++ * fpi_image_device_patient_retry:
++ * @self: a #FpImageDevice imaging fingerprint device
++ * @retry: The #FpDeviceRetry the driver would report
++ *
++ * For drivers implementing patient_rescan: called instead of
++ * fpi_image_device_retry_scan() while the finger is on the sensor. Returns
++ * %TRUE when the scan is taken again (patient_rescan was called); %FALSE
++ * when the driver must report the retry as usual.
++ */
++gboolean
++fpi_image_device_patient_retry (FpImageDevice *self, FpDeviceRetry retry)
++{
++  return fp_image_device_patient_rescan (self, TRUE, retry);
++}
++
++/**
++ * fpi_image_device_patient_lifted:
++ * @self: a #FpImageDevice imaging fingerprint device
++ *
++ * For drivers implementing patient_rescan: the finger was lifted before a
++ * scan taken again. Reports the last failure and returns %TRUE; returns
++ * %FALSE when no scan was taken again (the driver reports as usual).
++ */
++gboolean
++fpi_image_device_patient_lifted (FpImageDevice *self)
++{
++  FpImageDevicePrivate *priv = fp_image_device_get_instance_private (self);
++  FpiDeviceAction action = fpi_device_get_current_action (FP_DEVICE (self));
++
++  if (priv->patient_attempts == 0 || !priv->active ||
++      priv->state != FPI_IMAGE_DEVICE_STATE_CAPTURE ||
++      (action != FPI_DEVICE_ACTION_VERIFY && action != FPI_DEVICE_ACTION_IDENTIFY))
++    return FALSE;
++
++  g_message ("Patient verify: finger lifted, reporting the last failure");
++  if (priv->patient_last_retry)
++    {
++      fpi_image_device_retry_scan (self, priv->patient_last_retry_code);
++      return TRUE;
++    }
++
++  if (action == FPI_DEVICE_ACTION_VERIFY)
++    fpi_device_verify_report (FP_DEVICE (self), FPI_MATCH_FAIL, NULL, NULL);
++  else
++    fpi_device_identify_report (FP_DEVICE (self), NULL, NULL, NULL);
++  fp_image_device_maybe_complete_action (self, NULL);
++  fpi_image_device_deactivate (self, TRUE);
++  return TRUE;
++}
++
+ /**
+  * fpi_image_device_retry_scan:
+  * @self: a #FpImageDevice imaging fingerprint device
+diff --git a/libfprint/fpi-image-device.h b/libfprint/fpi-image-device.h
+index 3147a71..36b6609 100644
+--- a/libfprint/fpi-image-device.h
++++ b/libfprint/fpi-image-device.h
+@@ -123,6 +123,10 @@ struct _FpImageDeviceClass
+   void                    (*change_state) (FpImageDevice      *dev,
+                                            FpiImageDeviceState state);
+   void                    (*deactivate)   (FpImageDevice *dev);
++
++  /* Optional: capture again without waiting for the finger to be lifted
++   * (patient verify, see fpi_image_device_patient_retry()) */
++  void                    (*patient_rescan) (FpImageDevice *dev);
+ };
+ 
+ void fpi_image_device_set_bz3_threshold (FpImageDevice *self,
+@@ -144,5 +148,8 @@ void fpi_image_device_report_finger_status (FpImageDevice *self,
+                                             gboolean       present);
+ void fpi_image_device_image_captured (FpImageDevice *self,
+                                       FpImage       *image);
++gboolean fpi_image_device_patient_retry (FpImageDevice *self,
++                                         FpDeviceRetry  retry);
++gboolean fpi_image_device_patient_lifted (FpImageDevice *self);
+ void fpi_image_device_retry_scan (FpImageDevice *self,
+                                   FpDeviceRetry  retry);
+-- 
+2.56.1
+

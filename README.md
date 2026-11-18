@@ -36,7 +36,7 @@ little while enrolling (tip, centre, slightly sideways).
 
 Open the applications menu and look for **Fingerprint reader** (or type `leitor-digital` in a
 terminal): 1 enroll a finger (another one, or the same again), 2 test, 3 recognition level,
-4 delete fingerprints, 5 update or repair, 6 uninstall. No commands to type.
+4 reader patience, 5 delete fingerprints, 6 update or repair, 7 uninstall. No commands to type.
 After reinstalling the system, just run the install line again.
 
 ## Recognition level
@@ -47,9 +47,22 @@ After reinstalling the system, just run the install line again.
 | Default | 60 | most people |
 | Tolerant | 55 | callused or dry fingers, or fingers that often fail |
 
-In the tests, wrong fingers scored at most 51: Tolerant is still above that, with less margin. The
+In the tests, wrong fingers almost always scored under 53, but one reached 56 in 40 tries:
+Tolerant would accept that wrong finger. Use it only if Default often fails with your finger. The
 level is kept on updates. Without questions: `--level tolerant` (or `default`, `strict`), on install
 or with `--tune`.
+
+> **Worth tuning on your computer.** The defaults (level and patience) come from tests on a single
+> laptop, with one person's fingers. Use it for a few days and test with menu option 2, with the
+> enrolled finger and with other fingers too: if another finger is accepted, raise the level; if
+> yours is often rejected, lower the level, change the patience or enroll the finger again.
+
+## Reader patience
+
+The reader reads as soon as the finger stops. On a failure it says so at once and, without you
+lifting the finger, reads again when the finger moves (shift it a little). Menu option 4: **Fast**
+(default), **Patient** (waits for the finger to stay still a bit longer), **Very patient** (another
+half second after the touch). Without questions: `--patience fast|patient|very`.
 
 ## Systems
 
@@ -94,8 +107,8 @@ Vostro 3500. Any computer with USB `27c6:538d` and firmware `GF5298_GM168SEC_APP
 - **I tried another guide first:** some scripts install a different driver over the system's
   fingerprint library (`libfprint`). The installer notices and offers to restore the original; this
   driver does not depend on it.
-- **Stopped working after a big system upgrade:** menu "Fingerprint reader", **5 Update or repair**.
-- **Remove everything:** menu "Fingerprint reader", **6 Uninstall**.
+- **Stopped working after a big system upgrade:** menu "Fingerprint reader", **6 Update or repair**.
+- **Remove everything:** menu "Fingerprint reader", **7 Uninstall**.
 
 ## Tell us how it went
 

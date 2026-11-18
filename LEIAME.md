@@ -45,11 +45,19 @@ terminal). Tudo é feito por ali, sem digitar comandos:
 | 1. Cadastrar um dedo | outro dedo, ou o mesmo de novo (por exemplo, com o dedo mais seco) |
 | 2. Testar a digital | um toque, mostra se reconheceu |
 | 3. Nível de reconhecimento | Rigoroso, Padrão ou Tolerante (veja abaixo) |
-| 4. Apagar digitais | remove os dedos cadastrados |
-| 5. Atualizar ou reparar | baixa a versão mais nova e conserta a instalação |
-| 6. Desinstalar | tira tudo e devolve o sistema como era |
+| 4. Paciência do leitor | tempo para posicionar o dedo e novas leituras (veja abaixo) |
+| 5. Apagar digitais | remove os dedos cadastrados |
+| 6. Atualizar ou reparar | baixa a versão mais nova e conserta a instalação |
+| 7. Desinstalar | tira tudo e devolve o sistema como era |
 
 Depois de formatar ou reinstalar o sistema, é só rodar a linha de instalação de novo.
+
+## Paciência do leitor
+
+O leitor lê assim que o dedo para no lugar. Se não reconhecer, avisa na hora e, sem você tirar o
+dedo, lê de novo quando o dedo se mexe (ajeite um pouco a posição). Menu, opção 4: **Rápido**
+(padrão), **Paciente** (espera o dedo ficar parado um pouco mais), **Muito paciente** (mais meio
+segundo depois do toque). Sem perguntas: `--paciencia rapido|paciente|muito`.
 
 ## Nível de reconhecimento
 
@@ -59,9 +67,15 @@ Depois de formatar ou reinstalar o sistema, é só rodar a linha de instalação
 | Padrão | 60 | a maioria das pessoas |
 | Tolerante | 55 | dedos com calo, pele seca ou que costumam falhar |
 
-Nos testes, dedos errados tiraram no máximo 51: o Tolerante ainda fica acima disso, com menos folga.
+Nos testes, dedos errados quase sempre tiraram menos de 53, mas um chegou a 56 em 40 tentativas: o
+Tolerante aceitaria esse dedo errado. Use-o só se o Padrão falhar muito com o seu dedo.
 O nível escolhido é mantido nas atualizações. Com o uso, o leitor também aprende sozinho com os
 toques bem reconhecidos.
+
+> **Vale ajustar no seu computador.** Os valores padrão (nível e paciência) vêm de testes num só
+> notebook, com os dedos de uma pessoa. Use alguns dias e teste pela opção 2 do menu, com o dedo
+> cadastrado e também com outros dedos: se outro dedo for aceito, suba o nível; se o seu for
+> recusado muitas vezes, baixe o nível, mude a paciência ou cadastre o dedo de novo.
 
 ## Sistemas
 
@@ -108,8 +122,8 @@ Latitude 3410; Vostro 3500. Qualquer computador com o leitor USB `27c6:538d` e f
   digital do sistema (`libfprint`). O instalador percebe e oferece devolver o original; este driver
   não depende dela.
 - **Depois de uma atualização grande do sistema parou de funcionar:** abra o menu "Leitor de
-  digital" e escolha **5. Atualizar ou reparar**.
-- **Quero tirar tudo:** menu "Leitor de digital", opção **6. Desinstalar**.
+  digital" e escolha **6. Atualizar ou reparar**.
+- **Quero tirar tudo:** menu "Leitor de digital", opção **7. Desinstalar**.
 
 ## Conte como foi
 

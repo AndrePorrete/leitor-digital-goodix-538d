@@ -8,6 +8,9 @@
 #                               (enroll, test, recognition level, update, uninstall)
 #   Uninstall:                  bash instalar.sh --desinstalar      (or --uninstall)
 #   Recognition level:          bash instalar.sh --ajustar          (or --tune)
+#   Reader patience:            bash instalar.sh --paciencia rapido|paciente|muito
+#                                 (also fast|patient|very: time to place the finger and how
+#                                 many times it reads again before saying "no match")
 #   Options:                    --nivel rigoroso|padrao|tolerante  recognition level without asking
 #                                 (also strict|default|tolerant; works with install and --ajustar)
 #                               --pacote FILE.tar.gz   use a local bundle instead of downloading
@@ -29,9 +32,13 @@ ATALHO_BIN=/usr/local/bin/leitor-digital
 ATALHO_DESKTOP=/usr/local/share/applications/fprint-538d.desktop
 TOQUES=15 # enrollment stages of the driver
 AJUSTE_CONF=/etc/fprint-538d.conf # recognition level, kept on update
-# Acceptance threshold levels (score 0-100). Wrong fingers scored at most 51 in the tests.
+# Acceptance threshold levels (score 0-100). Wrong fingers scored at most 51 in the first tests; one
+# reached 56 in 40 tries of the 2026-11-17 battery (accepted at 55, refused at 60).
 NIVEIS=(70 60 55)
 NIVEL_PADRAO=60
+PACIENCIAS=(rapido paciente muito)
+# "stable polls, settle ms"; empty = driver defaults (1 still reading, no extra wait; 2026-11-17 battery)
+declare -A PACIENCIA_VALORES=([rapido]="" [paciente]="3 0" [muito]="3 500")
 DROPINS_ANTIGOS="goodix-538d.conf calibracao.conf" # manual install of the first version
 # Left by version 0.1.0 (own PAM profile / lines, power button): removed on update and uninstall
 LEGADO_LOGIND=/etc/systemd/logind.conf.d/fprint-538d-botao.conf
@@ -566,20 +573,56 @@ raiz_desinstalar() { # apagar_digitais(s/n)
   ok "Removido. O sistema voltou ao fprintd original da distribuição." "Removed. The system is back to the distribution fprintd."
 }
 
+# Settings file: one KEY=value per line; an empty value removes the key (driver default)
+conf_definir() { # KEY [value]
+  local tmp
+  tmp=$(mktemp)
+  [ -f "$AJUSTE_CONF" ] && grep -v -e "^$1=" -e '^#' -e '^$' "$AJUSTE_CONF" >"$tmp"
+  [ -n "${2:-}" ] && printf '%s=%s\n' "$1" "$2" >>"$tmp"
+  if [ -s "$tmp" ]; then
+    {
+      printf '# fprint-538d settings (menu "Leitor de digital"; or %s/share/fprint-538d/instalar.sh --ajustar | --paciencia)\n' "$PREFIXO"
+      printf '# The defaults come from tests on a single laptop; check them on yours (menu option 2, enrolled and other fingers).\n'
+      printf '# FPRINT_BZ3_THRESHOLD: minimum score (0-100) to accept a finger, default %s; lower accepts more, also wrong fingers.\n' "$NIVEL_PADRAO"
+      printf '# GOODIX53XD_STABLE_POLLS: still readings (100 ms each) before reading the finger (1-10, default 1).\n'
+      printf '# GOODIX53XD_RESUME: after a failed reading, read again when the finger moves, without lifting it (default 1; 0 = off).\n'
+      printf '# GOODIX53XD_SETTLE_MS: extra wait after the touch (ms, default 0).\n'
+      printf '# GOODIX53XD_MOVE_PERMILLE: change (tenths of a percent) that counts as the finger moving, for the resume (default 15).\n'
+      sort "$tmp"
+    } >"$AJUSTE_CONF"
+    chmod 644 "$AJUSTE_CONF"
+  else
+    rm -f "$AJUSTE_CONF"
+  fi
+  rm -f "$tmp"
+}
+
+ligar_conf() { # installs from version 0.1.0 do not read the file yet
+  grep -q '^EnvironmentFile=' "$DROPIN" || printf 'EnvironmentFile=-%s\n' "$AJUSTE_CONF" >>"$DROPIN"
+}
+
 gravar_nivel() { # limiar (no restart)
   case "$1" in *[!0-9]* | '') return 1 ;; esac
-  # installs from version 0.1.0 do not read the file yet
-  grep -q '^EnvironmentFile=' "$DROPIN" || printf 'EnvironmentFile=-%s\n' "$AJUSTE_CONF" >>"$DROPIN"
-  if [ "$1" = "$NIVEL_PADRAO" ]; then
-    rm -f "$AJUSTE_CONF"
-  else
-    cat >"$AJUSTE_CONF" <<EOF
-# fprint-538d recognition level (bash $PREFIXO/share/fprint-538d/instalar.sh --ajustar)
-# Minimum score (0-100) to accept a finger. Default $NIVEL_PADRAO; lower accepts more, also wrong fingers.
-FPRINT_BZ3_THRESHOLD=$1
-EOF
-    chmod 644 "$AJUSTE_CONF"
-  fi
+  ligar_conf
+  if [ "$1" = "$NIVEL_PADRAO" ]; then conf_definir FPRINT_BZ3_THRESHOLD; else conf_definir FPRINT_BZ3_THRESHOLD "$1"; fi
+}
+
+gravar_paciencia() { # preset name (no restart)
+  [ -n "${PACIENCIA_VALORES[$1]+x}" ] || return 1
+  local estavel ms
+  read -r estavel ms <<<"${PACIENCIA_VALORES[$1]}"
+  ligar_conf
+  conf_definir GOODIX53XD_STABLE_POLLS "$estavel"
+  conf_definir GOODIX53XD_SETTLE_MS "$ms"
+  conf_definir FPRINT_PATIENT_TRIES # 0.4.0 setting, replaced by the resume (0.5.0)
+  conf_definir FPRINT_PATIENT_SECONDS
+}
+
+raiz_paciencia() { # preset name
+  [ -e "$DROPIN" ] || fim_erro "O fprint-538d não está instalado." "fprint-538d is not installed."
+  gravar_paciencia "$1" || exit 1
+  systemctl daemon-reload
+  systemctl restart fprintd 2>/dev/null || true
 }
 
 raiz_ajustar() { # limiar
@@ -830,6 +873,15 @@ nome_nivel() {
   esac
 }
 
+aviso_ajuste() { # the defaults come from one laptop: ask users to check them on theirs
+  info "Os valores padrão vêm de testes num só notebook. No seu, o melhor ajuste pode ser outro:" \
+    "The defaults come from tests on a single laptop. On yours, the best setting may differ:"
+  info "use alguns dias e teste (opção 2 do menu) com o dedo cadastrado e com outros dedos." \
+    "use it for a few days and test (menu option 2) with the enrolled finger and with other fingers."
+  info "Outro dedo aceito: suba o nível. O seu dedo recusado muitas vezes: baixe o nível ou cadastre de novo." \
+    "Another finger accepted: raise the level. Your finger often rejected: lower the level or enroll again."
+}
+
 principal_menu() {
   [ -e "$DROPIN" ] || fim_erro "O leitor de digital (fprint-538d) não está instalado." "The fingerprint reader (fprint-538d) is not installed."
   local esc ja
@@ -838,13 +890,15 @@ principal_menu() {
     printf '\n%s━━ %s ━━%s\n' "$C_AZ" "$(t "Leitor de digital — o que você quer fazer?" "Fingerprint reader — what do you want to do?")" "$C_0"
     info "Digitais cadastradas: ${ja:-nenhuma}" "Enrolled fingerprints: ${ja:-none}"
     info "Nível de reconhecimento: $(nome_nivel "$(nivel_atual)")" "Recognition level: $(nome_nivel "$(nivel_atual)")"
+    info "Paciência do leitor: $(nome_paciencia "$(paciencia_atual)")" "Reader patience: $(nome_paciencia "$(paciencia_atual)")"
     printf '\n'
     printf '      1) %s\n' "$(t "Cadastrar um dedo" "Enroll a finger")"
     printf '      2) %s\n' "$(t "Testar a digital" "Test the fingerprint")"
     printf '      3) %s\n' "$(t "Nível de reconhecimento (para dedos difíceis)" "Recognition level (for hard fingers)")"
-    printf '      4) %s\n' "$(t "Apagar digitais" "Delete fingerprints")"
-    printf '      5) %s\n' "$(t "Atualizar ou reparar o driver" "Update or repair the driver")"
-    printf '      6) %s\n' "$(t "Desinstalar" "Uninstall")"
+    printf '      4) %s\n' "$(t "Paciência do leitor (tempo para posicionar o dedo)" "Reader patience (time to place the finger)")"
+    printf '      5) %s\n' "$(t "Apagar digitais" "Delete fingerprints")"
+    printf '      6) %s\n' "$(t "Atualizar ou reparar o driver" "Update or repair the driver")"
+    printf '      7) %s\n' "$(t "Desinstalar" "Uninstall")"
     printf '      0) %s\n' "$(t "Sair" "Exit")"
     printf '   %s%s%s ' "$C_N" "$(t "Digite o número e aperte Enter:" "Type the number and press Enter:")" "$C_0"
     read -r esc <&3 || exit 0
@@ -852,9 +906,10 @@ principal_menu() {
       1) cadastrar_dedo && perguntar "Testar agora (um toque)?" "Test now (one touch)?" s && testar_dedo ;;
       2) testar_dedo ;;
       3) principal_ajustar ;;
-      4) apagar_digitais ;;
-      5) exec bash "$SELF" --lang "$L" ;;
-      6) principal_desinstalar; exit 0 ;;
+      4) principal_paciencia ;;
+      5) apagar_digitais ;;
+      6) exec bash "$SELF" --lang "$L" ;;
+      7) principal_desinstalar; exit 0 ;;
       0) exit 0 ;;
       *) continue ;;
     esac
@@ -950,8 +1005,9 @@ escolher_nivel() {
     printf '      %d) %s  [%s]%s\n' $((i + 1)) "$(t "${nomes_pt[$i]}" "${nomes_en[$i]}")" "${NIVEIS[$i]}" \
       "$([ "${NIVEIS[$i]}" = "$atual" ] && t "  ← atual" "  ← current")"
   done
-  info "Nos testes, dedos errados tiraram no máximo 51; o Tolerante (55) ainda fica acima disso." \
-    "In the tests, wrong fingers scored at most 51; Tolerant (55) is still above that."
+  info "Nos testes, dedos errados quase sempre tiraram menos de 53, mas um chegou a 56: o Tolerante (55) o aceitaria." \
+    "In the tests, wrong fingers almost always scored under 53, but one reached 56: Tolerant (55) would accept it."
+  [ "${AVISO_AJUSTE:-0}" = 1 ] && aviso_ajuste
   printf '   %s%s%s ' "$C_N" "$(t "Digite o número e aperte Enter (só Enter = manter $(nome_nivel "$atual")):" "Type the number and press Enter (just Enter = keep $(nome_nivel "$atual")):")" "$C_0"
   read -r esc <&3 || esc=""
   case "$esc" in 1 | 2 | 3) NIVEL_ESCOLHIDO=${NIVEIS[$((esc - 1))]} ;; esac
@@ -970,7 +1026,7 @@ principal_ajustar() {
   else
     [ "$TEM_TTY" = 1 ] || fim_erro "Rode num terminal, ou use --nivel tolerante|padrao|rigoroso." \
       "Run it in a terminal, or use --nivel tolerant|default|strict."
-    escolher_nivel "$atual"
+    AVISO_AJUSTE=1 escolher_nivel "$atual"
   fi
   if [ -z "$NIVEL_ESCOLHIDO" ] || [ "$NIVEL_ESCOLHIDO" = "$atual" ]; then
     info "Nada mudou (nível $atual)." "Nothing changed (level $atual)."
@@ -978,6 +1034,74 @@ principal_ajustar() {
   fi
   como_root ajustar "$NIVEL_ESCOLHIDO" || exit 1
   ok "Nível de reconhecimento: $NIVEL_ESCOLHIDO (vale a partir do próximo toque)" "Recognition level: $NIVEL_ESCOLHIDO (applies from the next touch)"
+}
+
+paciencia_atual() {
+  local estavel ms p
+  if grep -q -e '^FPRINT_PATIENT_' -e '^GOODIX53XD_RESUME=' "$AJUSTE_CONF" 2>/dev/null; then
+    echo personalizada
+    return
+  fi
+  estavel=$(sed -n 's/^GOODIX53XD_STABLE_POLLS=//p' "$AJUSTE_CONF" 2>/dev/null)
+  ms=$(sed -n 's/^GOODIX53XD_SETTLE_MS=//p' "$AJUSTE_CONF" 2>/dev/null)
+  for p in "${PACIENCIAS[@]}"; do
+    if [ "${PACIENCIA_VALORES[$p]}" = "$(printf '%s' "$estavel${estavel:+ }$ms")" ]; then
+      echo "$p"
+      return
+    fi
+  done
+  echo personalizada
+}
+
+nome_paciencia() {
+  case "$1" in
+    rapido) t "Rápido" "Fast" ;;
+    paciente) t "Paciente" "Patient" ;;
+    muito) t "Muito paciente" "Very patient" ;;
+    *) t "Personalizada (em $AJUSTE_CONF)" "Custom (in $AJUSTE_CONF)" ;;
+  esac
+}
+
+paciencia_de_nome() { # name or number -> preset
+  case "${1,,}" in
+    1 | rapido | rápido | fast) echo rapido ;;
+    2 | paciente | patient) echo paciente ;;
+    3 | muito | very) echo muito ;;
+    *) return 1 ;;
+  esac
+}
+
+principal_paciencia() {
+  [ -e "$DROPIN" ] || fim_erro "O fprint-538d não está instalado. Instale primeiro: bash instalar.sh" \
+    "fprint-538d is not installed. Install first: bash instalar.sh"
+  local atual escolha esc
+  atual=$(paciencia_atual)
+  titulo "Paciência do leitor" "Reader patience"
+  if [ -n "$OPT_PACIENCIA" ]; then
+    escolha=$OPT_PACIENCIA
+  else
+    [ "$TEM_TTY" = 1 ] || fim_erro "Rode num terminal, ou use --paciencia rapido|paciente|muito." \
+      "Run it in a terminal, or use --patience fast|patient|very."
+    info "Quanto o leitor espera o dedo ficar parado antes de ler. Se não reconhecer, ele avisa na hora" \
+      "How long the reader waits for the finger to stay still before reading. On a failure it says so at"
+    info "e lê de novo quando você mexe o dedo, sem precisar tirar:" "once and reads again when you move the finger, without lifting it:"
+    printf '      1) %s%s\n' "$(t "Rápido (recomendado) — lê assim que o dedo para" "Fast (recommended) — reads as soon as the finger stops")" \
+      "$([ "$atual" = rapido ] && t "  ← atual" "  ← current")"
+    printf '      2) %s%s\n' "$(t "Paciente — espera o dedo ficar parado um pouco mais (cerca de 0,3 s)" "Patient — waits for the finger to stay still a bit longer (about 0.3 s)")" \
+      "$([ "$atual" = paciente ] && t "  ← atual" "  ← current")"
+    printf '      3) %s%s\n' "$(t "Muito paciente — espera mais meio segundo depois do toque" "Very patient — waits another half second after the touch")" \
+      "$([ "$atual" = muito ] && t "  ← atual" "  ← current")"
+    aviso_ajuste
+    printf '   %s%s%s ' "$C_N" "$(t "Digite o número e aperte Enter (só Enter = manter):" "Type the number and press Enter (just Enter = keep):")" "$C_0"
+    read -r esc <&3 || esc=""
+    escolha=$(paciencia_de_nome "$esc") || escolha=""
+  fi
+  if [ -z "$escolha" ] || [ "$escolha" = "$atual" ]; then
+    info "Nada mudou ($(nome_paciencia "$atual"))." "Nothing changed ($(nome_paciencia "$atual"))."
+    return 0
+  fi
+  como_root paciencia "$escolha" || exit 1
+  ok "Paciência do leitor: $(nome_paciencia "$escolha") (vale a partir do próximo toque)" "Reader patience: $(nome_paciencia "$escolha") (applies from the next touch)"
 }
 
 principal_desinstalar() {
@@ -1000,12 +1124,17 @@ principal_desinstalar() {
 [ "${FPRINT538D_SO_FUNCOES:-}" = 1 ] && return 0
 
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
-ACAO=instalar OPT_PACOTE="" OPT_COMPILAR=0 OPT_SEM_CADASTRO=0 OPT_NIVEL="" NIVEL_ESCOLHIDO=""
+ACAO=instalar OPT_PACOTE="" OPT_COMPILAR=0 OPT_SEM_CADASTRO=0 OPT_NIVEL="" NIVEL_ESCOLHIDO="" OPT_PACIENCIA=""
 while [ $# -gt 0 ]; do
   case "$1" in
     --desinstalar | --uninstall) ACAO=desinstalar ;;
     --ajustar | --tune) ACAO=ajustar ;;
     --menu) ACAO=menu ;;
+    --paciencia | --patience)
+      OPT_PACIENCIA=$(paciencia_de_nome "${2:-}") || fim_erro "Paciência desconhecida: ${2:-} (use rapido, paciente ou muito)" \
+        "Unknown patience: ${2:-} (use fast, patient or very)"
+      ACAO=paciencia
+      shift ;;
     --nivel | --level)
       OPT_NIVEL=$(nivel_de_nome "${2:-}") || fim_erro "Nível desconhecido: ${2:-} (use rigoroso, padrao ou tolerante)" \
         "Unknown level: ${2:-} (use strict, default or tolerant)"
@@ -1023,6 +1152,7 @@ while [ $# -gt 0 ]; do
         instalar) shift; raiz_instalar "$@" ;;
         desinstalar) shift; raiz_desinstalar "$@" ;;
         ajustar) shift; raiz_ajustar "$@" ;;
+        paciencia) shift; raiz_paciencia "$@" ;;
         *) exit 1 ;;
       esac
       exit $? ;;
@@ -1048,6 +1178,7 @@ principal() {
     instalar) principal_instalar ;;
     desinstalar) principal_desinstalar ;;
     ajustar) principal_ajustar ;;
+    paciencia) principal_paciencia ;;
     menu) principal_menu ;;
   esac
 }

@@ -1,0 +1,238 @@
+From 70058e84ea6cfe74bfa6d9aeaf425b84108c2337 Mon Sep 17 00:00:00 2001
+From: Porrete <56418580+AndrePorrete@users.noreply.github.com>
+Date: Mon, 16 Nov 2026 16:38:26 -0300
+Subject: [PATCH] goodixtls53xd: resume verify without lifting the finger
+
+After a failed verify or identify with the finger still on the sensor,
+the next scan keeps the calibration and captures again as soon as the
+finger moves (pixel change of GOODIX53XD_MOVE_PERCENT, default 8, or a
+contact change of 10 percent of the contact delta) and settles, instead
+of waiting for the finger to be lifted. GOODIX53XD_RESUME=0 disables.
+
+Capture once the image is stable for GOODIX53XD_STABLE_POLLS polls
+(default 2) with no fixed delay: GOODIX53XD_SETTLE_MS now defaults to 0.
+Patient verify is off by default (FPRINT_PATIENT_TRIES=0).
+---
+ libfprint/drivers/goodixtls/goodix53xd.c | 128 ++++++++++++++++++++++-
+ libfprint/fpi-image-device.c             |   4 +-
+ 2 files changed, 127 insertions(+), 5 deletions(-)
+
+diff --git a/libfprint/drivers/goodixtls/goodix53xd.c b/libfprint/drivers/goodixtls/goodix53xd.c
+index 3d22f85..dad1d6b 100644
+--- a/libfprint/drivers/goodixtls/goodix53xd.c
++++ b/libfprint/drivers/goodixtls/goodix53xd.c
+@@ -89,7 +89,20 @@
+ #define GOODIX53XD_SETTLE_MAX_POLLS 8
+ // Minimum time between the finger touching the sensor and the capture, to
+ // give time to place it ($GOODIX53XD_SETTLE_MS overrides, 0 to 3000)
+-#define GOODIX53XD_SETTLE_MIN_MS 500
++#define GOODIX53XD_SETTLE_MIN_MS 0
++// Consecutive stable polls before capturing ($GOODIX53XD_STABLE_POLLS, 1-10)
++#define GOODIX53XD_STABLE_POLLS 1
++// Resume: after a failed verify with the finger still on, the next scan
++// skips the calibration and captures once the finger moves (pixel change, or
++// contact change, in tenths of a percent of the contact delta) and settles
++// again. A still finger drifts about 1%, a moved one reaches 1.6-2.2%
++// (owner's battery, 2026-11-17). Contact under a quarter of the reference
++// counts as lifted (a lifted finger can leave a residue above the threshold).
++// $GOODIX53XD_RESUME=0 disables (lift the finger, as before).
++#define GOODIX53XD_RESUME_SECONDS 10
++#define GOODIX53XD_MOVE_PERMILLE 15 // $GOODIX53XD_MOVE_PERMILLE overrides
++#define GOODIX53XD_PRESSURE_PERMILLE 15
++#define GOODIX53XD_LIFT_FRACTION 4
+ // Patient verify: after a failed scan with the finger still on the sensor,
+ // pause before waiting for it to settle again (see fpi-image-device.c)
+ #define GOODIX53XD_REPOSITION_POLLS 3
+@@ -124,6 +137,8 @@ typedef enum {
+     GOODIX53XD_CAPTURE_PRESS,
+     GOODIX53XD_CAPTURE_WAIT_FINGER_OFF,
+     GOODIX53XD_CAPTURE_REPOSITION,
++    GOODIX53XD_CAPTURE_RESUME,
++    GOODIX53XD_CAPTURE_WAIT_MOVE,
+ } Goodix53xdCaptureMode;
+ 
+ struct _FpiDeviceGoodixTls53XD {
+@@ -158,6 +173,16 @@ struct _FpiDeviceGoodixTls53XD {
+   guint settle_polls;
+   guint settle_min_polls;
+   guint reposition_polls;
++  guint stable_count;
++  guint stable_polls;
++
++  // Resume (see GOODIX53XD_RESUME_SECONDS): detection frame of the last
++  // settled verify press, its contact delta and time (0: none)
++  Goodix53xdPix ref_img[GOODIX53XD_FRAME_SIZE];
++  guint ref_delta;
++  gint64 ref_time;
++  gboolean resume;
++  guint move_permille;
+ 
+   // Debug dumps, see dump_path()
+   gchar* dump_session;
+@@ -1012,6 +1037,7 @@ static void scan_on_read_img(FpDevice* dev, guint8* data, guint16 len,
+             fpi_image_device_report_finger_status(img_dev, TRUE);
+             self->last_delta = delta;
+             self->settle_polls = 0;
++            self->stable_count = 0;
+             self->capture_mode = GOODIX53XD_CAPTURE_SETTLE;
+         }
+ 
+@@ -1037,9 +1063,12 @@ static void scan_on_read_img(FpDevice* dev, guint8* data, guint16 len,
+             change * 100 <= self->last_delta * GOODIX53XD_SETTLE_PERCENT;
+         self->last_delta = delta;
+         self->settle_polls++;
++        self->stable_count = stable ? self->stable_count + 1 : 0;
+ 
+-        if ((!stable || self->settle_polls < self->settle_min_polls) &&
+-            self->settle_polls < self->settle_min_polls + GOODIX53XD_SETTLE_MAX_POLLS) {
++        if ((self->stable_count < self->stable_polls ||
++             self->settle_polls < self->settle_min_polls) &&
++            self->settle_polls < self->settle_min_polls + self->stable_polls +
++                                     GOODIX53XD_SETTLE_MAX_POLLS) {
+             fpi_ssm_jump_to_state(ssm, SCAN_STAGE_WAIT);
+             return;
+         }
+@@ -1047,6 +1076,17 @@ static void scan_on_read_img(FpDevice* dev, guint8* data, guint16 len,
+         fp_dbg("Finger settled, delta: %u after %u polls", delta,
+                self->settle_polls);
+ 
++        // Resume: a failed verify will wait for this finger to move
++        {
++            const FpiDeviceAction action = fpi_device_get_current_action(dev);
++            if (self->resume && (action == FPI_DEVICE_ACTION_VERIFY ||
++                                 action == FPI_DEVICE_ACTION_IDENTIFY)) {
++                memcpy(self->ref_img, frame, sizeof(self->ref_img));
++                self->ref_delta = delta;
++                self->ref_time = g_get_monotonic_time();
++            }
++        }
++
+         if (delta < self->min_contact) {
+             fp_dbg("Contact too light, delta %u < %u", delta,
+                    self->min_contact);
+@@ -1147,10 +1187,66 @@ static void scan_on_read_img(FpDevice* dev, guint8* data, guint16 len,
+             fp_dbg("Scanning again, delta: %u", delta);
+             self->last_delta = delta;
+             self->settle_polls = 0;
++            self->stable_count = 0;
+             self->capture_mode = GOODIX53XD_CAPTURE_SETTLE;
+         }
+         fpi_ssm_jump_to_state(ssm, SCAN_STAGE_WAIT);
+         return;
++
++    case GOODIX53XD_CAPTURE_RESUME:
++        // First frame of a verify started right after a failed one: keep
++        // the calibration when the finger is still on the sensor
++        decode_frame(frame, data);
++        delta = frame_delta(frame, self->detect_img);
++
++        if (delta <= self->finger_threshold ||
++            delta * GOODIX53XD_LIFT_FRACTION < self->ref_delta) {
++            fp_dbg("Resume: no finger, calibrating, delta: %u", delta);
++            self->ref_time = 0;
++            self->capture_mode = GOODIX53XD_CAPTURE_BACKGROUND;
++            self->background_frames = 0;
++            fpi_ssm_jump_to_state(ssm, SCAN_STAGE_SWITCH_TO_FDT_MODE);
++            return;
++        }
++
++        g_message("Resume: finger kept on the sensor, waiting for it to move");
++        fpi_image_device_report_finger_status(img_dev, TRUE);
++        self->capture_mode = GOODIX53XD_CAPTURE_WAIT_MOVE;
++        fpi_ssm_jump_to_state(ssm, SCAN_STAGE_WAIT);
++        return;
++
++    case GOODIX53XD_CAPTURE_WAIT_MOVE: {
++        // Capture again once the finger moved or the pressure changed
++        decode_frame(frame, data);
++        delta = frame_delta(frame, self->detect_img);
++
++        if (delta <= self->finger_threshold ||
++            delta * GOODIX53XD_LIFT_FRACTION < self->ref_delta) {
++            fp_dbg("Resume: finger lifted, delta: %u", delta);
++            self->ref_time = 0;
++            fpi_image_device_report_finger_status(img_dev, FALSE);
++            self->capture_mode = GOODIX53XD_CAPTURE_WAIT_FINGER_ON;
++            fpi_ssm_jump_to_state(ssm, SCAN_STAGE_WAIT);
++            return;
++        }
++
++        const guint moved = frame_delta(frame, self->ref_img);
++        const guint pressure = ABS((int) delta - (int) self->ref_delta);
++        fp_dbg("Resume: change %u, contact %u -> %u", moved, self->ref_delta,
++               delta);
++        if (moved * 1000 >= self->ref_delta * self->move_permille ||
++            pressure * 1000 >= self->ref_delta * GOODIX53XD_PRESSURE_PERMILLE) {
++            g_message("Resume: finger moved (change %u, contact %u -> %u), scanning again",
++                      moved, self->ref_delta, delta);
++            self->ref_time = 0;
++            self->last_delta = delta;
++            self->settle_polls = 0;
++            self->stable_count = 0;
++            self->capture_mode = GOODIX53XD_CAPTURE_SETTLE;
++        }
++        fpi_ssm_jump_to_state(ssm, SCAN_STAGE_WAIT);
++        return;
++    }
+     }
+ }
+ 
+@@ -1266,6 +1362,16 @@ static void scan_run_state(FpiSsm* ssm, FpDevice* dev)
+         self->capture_mode = GOODIX53XD_CAPTURE_BACKGROUND;
+         self->background_frames = 0;
+         self->dac_offset = self->finger_dac_offset + GOODIX53XD_DETECT_DAC_STEP;
++        {
++            const FpiDeviceAction action = fpi_device_get_current_action(dev);
++            if (self->resume && self->ref_time != 0 &&
++                g_get_monotonic_time() - self->ref_time <
++                    GOODIX53XD_RESUME_SECONDS * G_USEC_PER_SEC &&
++                (action == FPI_DEVICE_ACTION_VERIFY ||
++                 action == FPI_DEVICE_ACTION_IDENTIFY))
++                self->capture_mode = GOODIX53XD_CAPTURE_RESUME;
++            self->ref_time = 0;
++        }
+         fpi_ssm_jump_to_state(ssm, SCAN_STAGE_SWITCH_TO_FDT_MODE);
+         break;
+ 
+@@ -1446,6 +1552,22 @@ static void fpi_device_goodixtls53xd_init(FpiDeviceGoodixTls53XD* self)
+     if (settle_ms != NULL && *settle_ms != '\0')
+         ms = MIN(g_ascii_strtoull(settle_ms, NULL, 10), 3000);
+     self->settle_min_polls = (guint) (ms / GOODIX53XD_POLL_DELAY);
++
++    const gchar* stable_polls = g_getenv("GOODIX53XD_STABLE_POLLS");
++    self->stable_polls = GOODIX53XD_STABLE_POLLS;
++    if (stable_polls != NULL && *stable_polls != '\0')
++        self->stable_polls =
++            CLAMP(g_ascii_strtoull(stable_polls, NULL, 10), 1, 10);
++
++    const gchar* resume = g_getenv("GOODIX53XD_RESUME");
++    self->resume = resume == NULL || *resume == '\0' || g_strcmp0(resume, "0") != 0;
++
++    const gchar* move_permille = g_getenv("GOODIX53XD_MOVE_PERMILLE");
++    self->move_permille = GOODIX53XD_MOVE_PERMILLE;
++    if (move_permille != NULL && *move_permille != '\0')
++        self->move_permille =
++            CLAMP(g_ascii_strtoull(move_permille, NULL, 10), 1, 1000);
++    self->ref_time = 0;
+ }
+ 
+ static void fpi_device_goodixtls53xd_class_init(
+diff --git a/libfprint/fpi-image-device.c b/libfprint/fpi-image-device.c
+index a014b1e..628b8c2 100644
+--- a/libfprint/fpi-image-device.c
++++ b/libfprint/fpi-image-device.c
+@@ -271,9 +271,9 @@ fp_image_device_maybe_learn (FpImageDevice *self, FpPrint *template, FpPrint *pr
+  * condition that would ask to lift the finger) while the finger is still on
+  * the sensor, drivers implementing patient_rescan capture again as soon as
+  * the finger settles, instead of reporting the failure. The failure is only
+- * reported after $FPRINT_PATIENT_TRIES extra scans (default 3, 0 disables)
++ * reported after $FPRINT_PATIENT_TRIES extra scans (default 0: disabled)
+  * or $FPRINT_PATIENT_SECONDS (default 8) since the first failure. */
+-#define FP_IMAGE_DEVICE_PATIENT_TRIES 3
++#define FP_IMAGE_DEVICE_PATIENT_TRIES 0
+ #define FP_IMAGE_DEVICE_PATIENT_SECONDS 8
+ 
+ static guint
+-- 
+2.56.1
+
